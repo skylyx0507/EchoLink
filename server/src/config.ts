@@ -1,13 +1,16 @@
 import { types as mediasoupTypes } from "mediasoup";
 
+// 从环境变量获取服务器公网 IP
+const announcedIp = process.env.ANNOUNCED_IP || "127.0.0.1";
+
 export const config = {
   // HTTP + WebSocket server port
-  listenPort: 3000,
+  listenPort: parseInt(process.env.LISTEN_PORT || "3000", 10),
 
   // mediasoup Worker settings
   worker: {
-    rtcMinPort: 10000,
-    rtcMaxPort: 59999,
+    rtcMinPort: parseInt(process.env.RTC_MIN_PORT || "10000", 10),
+    rtcMaxPort: parseInt(process.env.RTC_MAX_PORT || "10100", 10),
     logLevel: "warn" as mediasoupTypes.WorkerLogLevel,
     logTags: [
       "info",
@@ -36,10 +39,8 @@ export const config = {
 
   // WebRtcTransport settings
   webRtcTransport: {
-    // Server public IP. Change to actual public IP in production.
-    // For local development, use 127.0.0.1.
-    announcedIp: "127.0.0.1",
-    listenIp: { ip: "0.0.0.0", announcedIp: "127.0.0.1" },
+    announcedIp,
+    listenIp: { ip: "0.0.0.0", announcedIp },
     initialAvailableOutgoingBitrate: 1000000,
   },
 };

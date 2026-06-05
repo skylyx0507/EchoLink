@@ -123,6 +123,9 @@ export function handleSignaling(
     if (!roomClients.has(roomId)) roomClients.set(roomId, new Set());
     roomClients.get(roomId)!.add(ws);
 
+    // Collect existing peers (excluding self)
+    const existingPeers = room.getPeerIds().filter((id) => id !== peerId);
+
     // Collect existing producers from other peers
     const existingProducers = room.getOtherProducers(peerId).map((p) => ({
       producerId: p.id,
@@ -134,6 +137,7 @@ export function handleSignaling(
       roomId,
       peerId,
       rtpCapabilities: room.getRtpCapabilities(),
+      existingPeers,
       existingProducers,
     });
 
@@ -212,6 +216,14 @@ export function handleSignaling(
 
     producer.on("transportclose", () => {
       peer.producers.delete(producer.id);
+      // 广播 producer 关闭，更新麦克风状态
+      if (currentRoom && currentPeerId) {
+        broadcast(currentRoom.id, currentPeerId, {
+          type: "producerClosed",
+          producerId: producer.id,
+          peerId: currentPeerId,
+        });
+      }
     });
 
     send(ws, { type: "produced", producerId: producer.id });

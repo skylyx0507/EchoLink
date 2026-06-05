@@ -1,0 +1,32 @@
+# mediasoup SFU + WebSocket 信令服务器
+FROM node:20-slim
+
+WORKDIR /app
+
+# 安装 mediasoup 依赖
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制 package 文件
+COPY package*.json ./
+
+# 安装依赖
+RUN npm ci --only=production
+
+# 复制源代码
+COPY . .
+
+# 编译 TypeScript
+RUN npm run build
+
+# 暴露端口
+# 3000: WebSocket 信令
+# 10000-10100: mediasoup WebRTC UDP 端口
+EXPOSE 3000
+EXPOSE 10000-10100/udp
+
+# 启动服务
+CMD ["node", "dist/index.js"]

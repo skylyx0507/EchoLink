@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # mediasoup SFU + WebSocket 信令服务器
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: echolink-server
+    restart: unless-stopped
+    ports:
+      - "${LISTEN_PORT:-3000}:3000"           # WebSocket 信令
+      - "${RTC_MIN_PORT:-10000}-${RTC_MAX_PORT:-10100}:${RTC_MIN_PORT:-10000}-${RTC_MAX_PORT:-10100}/udp"  # mediasoup WebRTC
+    environment:
+      - NODE_ENV=production
+      - ANNOUNCED_IP=${ANNOUNCED_IP:-127.0.0.1}
+      - LISTEN_PORT=3000
+      - RTC_MIN_PORT=${RTC_MIN_PORT:-10000}
+      - RTC_MAX_PORT=${RTC_MAX_PORT:-10100}
+    env_file:
+      - .env
+    networks:
+      - echolink-net
+
+  # Web 客户端
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: echolink-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - server
+    networks:
+      - echolink-net
+
+networks:
+  echolink-net:
+    driver: bridge
