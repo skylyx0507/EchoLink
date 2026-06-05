@@ -13,14 +13,17 @@ RUN apt-get update && apt-get install -y \
 # 复制 package 文件
 COPY package*.json ./
 
-# 安装依赖
-RUN npm ci --only=production
-
 # 复制源代码
 COPY . .
 
+# 安装所有依赖（含 devDependencies 用于编译）
+RUN npm ci
+
 # 编译 TypeScript
 RUN npm run build
+
+# 移除 devDependencies 减小镜像体积
+RUN npm prune --production
 
 # 暴露端口
 # 3000: WebSocket 信令
