@@ -9,7 +9,7 @@ import type {
   ConsumedMessage,
 } from "../types";
 
-const WS_URL = "ws://localhost:3000";
+const WS_URL = `ws://${window.location.host}/ws`;
 
 // 降噪档位配置
 export type NoiseLevel = "off" | "low" | "medium" | "high";
@@ -117,6 +117,10 @@ export function useMediasoup() {
       }
     );
 
+    transport.on("connectionstatechange", (state) => {
+      console.log(`Send transport [${transport.id}] connection state: ${state}`);
+    });
+
     sendTransportRef.current = transport;
   }, [send, waitForMessage]);
 
@@ -150,6 +154,10 @@ export function useMediasoup() {
         }
       };
       messageHandlersRef.current.set("transportConnected", handleConnect);
+    });
+
+    transport.on("connectionstatechange", (state) => {
+      console.log(`Recv transport [${transport.id}] connection state: ${state}`);
     });
 
     recvTransportRef.current = transport;
@@ -187,7 +195,18 @@ export function useMediasoup() {
         const audioElement = new Audio();
         audioElement.srcObject = new MediaStream([consumer.track]);
         audioElement.autoplay = true;
+        audioElement.muted = false;
         document.body.appendChild(audioElement);
+
+        // 显式播放，处理浏览器自动播放策略
+        audioElement.play().catch((e) => {
+          console.warn("Audio autoplay blocked:", e);
+        });
+
+        // 监听 track unmute 事件再次尝试播放
+        consumer.track.onunmute = () => {
+          audioElement.play().catch(() => {});
+        };
 
         // 更新对等端信息
         const peer = peersRef.current.get(peerId) || { peerId };
@@ -296,12 +315,19 @@ export function useMediasoup() {
       return;
     }
 
+    // 防重复：如果已有 producer，先关闭旧的
+    if (producerRef.current) {
+      console.warn("Producer already exists, closing old one before creating new");
+      producerRef.current.close();
+      producerRef.current = null;
+    }
+
     try {
       // 获取音频流 - 结合浏览器原生降噪
       const rawStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: noiseLevel !== "off", // 使用浏览器原生降噪（基于 RNNoise）
+          noiseSuppression: noiseLevel !== "off",
           autoGainControl: true,
           sampleRate: 48000,
         },
@@ -351,6 +377,13 @@ export function useMediasoup() {
       const producer = await sendTransport.produce({ track: processedTrack });
       producerRef.current = producer;
 
+      // 监听 producer 状态
+      producer.on("transportclose", () => {
+        console.log("Producer transport closed");
+        producerRef.current = null;
+        setRoomState((prev) => ({ ...prev, micEnabled: false }));
+      });
+
       setRoomState((prev) => ({ ...prev, micEnabled: true }));
 
       // 开始延迟检测
@@ -358,7 +391,7 @@ export function useMediasoup() {
     } catch (err) {
       console.error("Failed to enable mic:", err);
     }
-  }, [startSpeakingDetection, noiseLevel]);
+  }, [startSpeakingDetection, noiseLevel, startLatencyMonitoring]);
 
   // 关闭麦克风
   const disableMic = useCallback(() => {
