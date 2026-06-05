@@ -2,8 +2,8 @@ import { types as mediasoupTypes } from "mediasoup";
 
 export interface Peer {
   id: string;
-  sendTransport: mediasoupTypes.WebRtcTransport | null;
-  recvTransport: mediasoupTypes.WebRtcTransport | null;
+  sendTransport: mediasoupTypes.WebRtcTransport | mediasoupTypes.PlainTransport | null;
+  recvTransport: mediasoupTypes.WebRtcTransport | mediasoupTypes.PlainTransport | null;
   producers: Map<string, mediasoupTypes.Producer>;
   consumers: Map<string, mediasoupTypes.Consumer>;
 }

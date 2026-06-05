@@ -112,6 +112,20 @@ export class Room {
     return transport;
   }
 
+  /**
+   * 创建 PlainTransport（用于 C# 等非浏览器客户端）
+   * PlainTransport 接收原始 RTP，无需 ICE/DTLS
+   * comedia=true 时自动检测远端地址
+   */
+  async createPlainTransport(): Promise<mediasoupTypes.PlainTransport> {
+    const transport = await this.router.createPlainTransport({
+      listenIp: config.webRtcTransport.listenIp,
+      rtcpMux: true,
+      comedia: true,
+    });
+    return transport;
+  }
+
   getPeerIds(): string[] {
     return Array.from(this.peers.keys());
   }

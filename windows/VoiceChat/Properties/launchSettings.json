@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "VoiceChat": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": ""
+    }
+  }
+}

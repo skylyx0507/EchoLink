@@ -84,6 +84,9 @@ export function handleSignaling(
         case "resumeConsuming":
           await handleResumeConsuming(msg);
           break;
+        case "createPlainTransport":
+          await handleCreatePlainTransport(msg);
+          break;
         case "leaveRoom":
           handleLeaveRoom();
           break;
@@ -177,8 +180,8 @@ export function handleSignaling(
     if (!peer) throw new Error("Peer not found");
 
     const { transportId, dtlsParameters } = msg;
-    if (!transportId || !dtlsParameters) {
-      throw new Error("transportId and dtlsParameters required");
+    if (!transportId) {
+      throw new Error("transportId required");
     }
 
     const transport =
@@ -190,7 +193,11 @@ export function handleSignaling(
 
     if (!transport) throw new Error(`Transport ${transportId} not found`);
 
-    await transport.connect({ dtlsParameters });
+    // PlainTransport with comedia=true 不需要 connect，会自动检测远端地址
+    // WebRtcTransport 需要 DTLS 参数
+    if (dtlsParameters) {
+      await transport.connect({ dtlsParameters });
+    }
 
     send(ws, { type: "transportConnected", transportId });
   }
@@ -294,6 +301,31 @@ export function handleSignaling(
     await consumer.resume();
 
     send(ws, { type: "consumerResumed", consumerId });
+  }
+
+  async function handleCreatePlainTransport(msg: SignalingMessage): Promise<void> {
+    if (!currentRoom || !currentPeerId) throw new Error("Not in a room");
+
+    const peer = currentRoom.getPeer(currentPeerId);
+    if (!peer) throw new Error("Peer not found");
+
+    const transport = await currentRoom.createPlainTransport();
+    const direction = msg.direction;
+
+    if (direction === "send") {
+      peer.sendTransport = transport;
+    } else {
+      peer.recvTransport = transport;
+    }
+
+    send(ws, {
+      type: "plainTransportCreated",
+      direction,
+      id: transport.id,
+      ip: transport.tuple.localIp,
+      port: transport.tuple.localPort,
+      rtcpPort: transport.rtcpTuple?.localPort,
+    });
   }
 
   function handleLeaveRoom(): void {
