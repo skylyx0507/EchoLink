@@ -14,7 +14,9 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# 配置 npm 使用国内镜像
+# 配置 pip 和 npm 使用国内镜像
+RUN pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple/ --global 2>/dev/null || true
+RUN npm config set registry https://registry.npmmirror.com
 RUN npm config set registry https://registry.npmmirror.com
 
 # 复制 package 文件
