@@ -49,7 +49,8 @@ export function useMediasoup() {
   const deviceRef = useRef<Device | null>(null);
   const sendTransportRef = useRef<types.Transport | null>(null);
   const recvTransportRef = useRef<types.Transport | null>(null);
-  const producerRef = useRef<types.Producer | null>(null);
+  const producersRef = useRef<Map<string, types.Producer>>(new Map());
+  const activeProducerIdRef = useRef<string | null>(null);
   const consumersRef = useRef<Map<string, types.Consumer>>(new Map());
   const peersRef = useRef<Map<string, PeerInfo>>(new Map());
   const pendingConsumesRef = useRef<
@@ -62,6 +63,12 @@ export function useMediasoup() {
   const rawStreamRef = useRef<MediaStream | null>(null);
   const messageHandlersRef = useRef<Map<string, (msg: SignalingMessage) => void>>(new Map());
   const latencyIntervalRef = useRef<number | null>(null);
+
+  // 检测浏览器是否支持 setSinkId
+  const supportsSetSinkId = useRef(
+    typeof HTMLAudioElement !== 'undefined' &&
+    'setSinkId' in HTMLAudioElement.prototype
+  );
 
   // 持久化设备选择
   useEffect(() => {
@@ -334,28 +341,28 @@ export function useMediasoup() {
     }
 
     latencyIntervalRef.current = window.setInterval(async () => {
-      const producer = producerRef.current;
-      if (!producer) return;
+      let maxRtt = 0;
+      let hasStats = false;
 
-      try {
-        const stats = await producer.getStats();
-        let rtt = 0;
+      for (const producer of producersRef.current.values()) {
+        try {
+          const stats = await producer.getStats();
+          stats.forEach((report) => {
+            if (report.type === "transport") {
+              maxRtt = Math.max(maxRtt, report.rtt || 0);
+            }
+            if (report.type === "remote-inbound-rtp") {
+              maxRtt = Math.max(maxRtt, report.roundTripTime || 0);
+            }
+          });
+          hasStats = true;
+        } catch (err) {
+          // 静默处理单个 producer 的错误
+        }
+      }
 
-        stats.forEach((report) => {
-          if (report.type === "transport") {
-            // 获取 transport 级别的 RTT
-            rtt = report.rtt || 0;
-          }
-          if (report.type === "remote-inbound-rtp") {
-            // 获取远端报告的 RTT
-            rtt = report.roundTripTime || rtt;
-          }
-        });
-
-        // 转换为毫秒
-        setLatency(Math.round(rtt * 1000));
-      } catch (err) {
-        // 静默处理错误
+      if (hasStats) {
+        setLatency(Math.round(maxRtt * 1000));
       }
     }, 2000); // 每 2 秒检测一次
   }, []);
@@ -414,18 +421,21 @@ export function useMediasoup() {
   }, []);
 
   // 开启麦克风（带降噪）
-  const enableMic = useCallback(async () => {
+  const enableMic = useCallback(async (): Promise<string | null> => {
     const sendTransport = sendTransportRef.current;
     if (!sendTransport) {
       console.error("Send transport not ready");
-      return;
+      return null;
     }
 
-    // 防重复：如果已有 producer，先关闭旧的
-    if (producerRef.current) {
+    // 防重复：如果已有 active producer，先关闭旧的
+    const activeId = activeProducerIdRef.current;
+    if (activeId && producersRef.current.has(activeId)) {
       console.warn("Producer already exists, closing old one before creating new");
-      producerRef.current.close();
-      producerRef.current = null;
+      const oldProducer = producersRef.current.get(activeId)!;
+      oldProducer.close();
+      producersRef.current.delete(activeId);
+      activeProducerIdRef.current = null;
     }
 
     try {
@@ -485,46 +495,68 @@ export function useMediasoup() {
       }
 
       const producer = await sendTransport.produce({ track: processedTrack });
-      producerRef.current = producer;
+      const producerId = producer.id;
+      producersRef.current.set(producerId, producer);
+      activeProducerIdRef.current = producerId;
 
       // 监听 producer 状态
       producer.on("transportclose", () => {
         console.log("Producer transport closed");
-        producerRef.current = null;
-        setRoomState((prev) => ({ ...prev, micEnabled: false }));
+        producersRef.current.delete(producerId);
+        if (activeProducerIdRef.current === producerId) {
+          activeProducerIdRef.current = null;
+        }
+        setRoomState((prev) => ({ ...prev, micEnabled: producersRef.current.size > 0 }));
       });
 
       setRoomState((prev) => ({ ...prev, micEnabled: true }));
 
       // 开始延迟检测
       startLatencyMonitoring();
+
+      return producerId;
     } catch (err) {
       console.error("Failed to enable mic:", err);
+      return null;
     }
   }, [startSpeakingDetection, noiseLevel, startLatencyMonitoring, selectedMic]);
 
   // 关闭麦克风
-  const disableMic = useCallback(() => {
-    const producer = producerRef.current;
-    if (producer) {
-      producer.close();
-      producerRef.current = null;
+  const disableMic = useCallback((targetProducerId?: string) => {
+    if (targetProducerId) {
+      // 关闭指定 Producer
+      const producer = producersRef.current.get(targetProducerId);
+      if (producer) {
+        producer.close();
+        producersRef.current.delete(targetProducerId);
+      }
+      if (activeProducerIdRef.current === targetProducerId) {
+        activeProducerIdRef.current = null;
+      }
+    } else {
+      // 关闭所有 Producer
+      producersRef.current.forEach((producer) => producer.close());
+      producersRef.current.clear();
+      activeProducerIdRef.current = null;
     }
 
-    // 清理降噪资源
-    if (noiseSuppressorRef.current) {
-      noiseSuppressorRef.current.disconnect();
-      noiseSuppressorRef.current = null;
+    // 清理降噪资源（仅当没有活跃 Producer 时）
+    if (producersRef.current.size === 0) {
+      if (noiseSuppressorRef.current) {
+        noiseSuppressorRef.current.disconnect();
+        noiseSuppressorRef.current = null;
+      }
+
+      if (rawStreamRef.current) {
+        rawStreamRef.current.getTracks().forEach(track => track.stop());
+        rawStreamRef.current = null;
+      }
+
+      stopSpeakingDetection();
+      stopLatencyMonitoring();
     }
 
-    if (rawStreamRef.current) {
-      rawStreamRef.current.getTracks().forEach(track => track.stop());
-      rawStreamRef.current = null;
-    }
-
-    stopSpeakingDetection();
-    stopLatencyMonitoring();
-    setRoomState((prev) => ({ ...prev, micEnabled: false }));
+    setRoomState((prev) => ({ ...prev, micEnabled: producersRef.current.size > 0 }));
   }, [stopSpeakingDetection, stopLatencyMonitoring]);
 
   // 加入房间
@@ -616,9 +648,6 @@ export function useMediasoup() {
             break;
           }
 
-          case "error":
-            console.error("Signaling error:", msg.message);
-            break;
         }
       };
 
@@ -704,9 +733,10 @@ export function useMediasoup() {
     consumersRef.current.forEach((c) => c.close());
     consumersRef.current.clear();
 
-    // 关闭 producer
-    producerRef.current?.close();
-    producerRef.current = null;
+    // 关闭所有 producers
+    producersRef.current.forEach((p) => p.close());
+    producersRef.current.clear();
+    activeProducerIdRef.current = null;
 
     // 关闭 transports
     sendTransportRef.current?.close();
@@ -768,5 +798,6 @@ export function useMediasoup() {
       applySpeakerToAudioElements(id);
     },
     enumerateAudioDevices,
+    supportsSetSinkId: supportsSetSinkId.current,
   };
 }
