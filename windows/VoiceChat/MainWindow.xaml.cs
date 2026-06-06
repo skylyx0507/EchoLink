@@ -14,6 +14,7 @@ using System.Windows.Threading;
 using Concentus.Enums;
 using Concentus.Structs;
 using NAudio.Wave;
+using VoiceChat.Audio;
 using WebSocketSharp;
 
 namespace VoiceChat;
@@ -29,6 +30,7 @@ public partial class MainWindow : Window
     // ==================== mediasoup ====================
     private string? _sendTransportId;
     private string? _recvTransportId;
+    private string? _producerId;
 
     // ==================== RTP ====================
     private UdpClient? _udpClient;
@@ -42,7 +44,7 @@ public partial class MainWindow : Window
     // ==================== 音频 ====================
     private WaveInEvent? _micCapture;
     private WaveOutEvent? _audioOutput;
-    private BufferedWaveProvider? _playbackBuffer;
+    private AdaptiveJitterBuffer? _jitterBuffer;
     private int _selectedMicDevice = -1; // -1 = 系统默认
     private int _selectedSpeakerDevice = -1; // -1 = 系统默认
 
@@ -57,11 +59,39 @@ public partial class MainWindow : Window
     // ==================== RTP 状态 ====================
     private ushort _sendSeq;
     private uint _sendTimestamp;
-    private readonly uint _sendSsrc = 1000000000u + (uint)new Random().Next(0, 2000000000);
+    private uint _sendSsrc;
 
     // ==================== 成员 ====================
     private record PeerInfo(string PeerId, bool MicEnabled);
     private readonly Dictionary<string, PeerInfo> _peers = new();
+
+    // ==================== 音量控制 ====================
+    private float _masterVolume = 1.0f;
+    private float _micVolume = 1.0f;
+    private readonly Dictionary<uint, string> _ssrcToPeerId = new();
+
+    public void SetMasterVolume(float volume)
+    {
+        _masterVolume = Math.Clamp(volume, 0f, 2f);
+        if (_jitterBuffer != null) _jitterBuffer.MasterVolume = _masterVolume;
+    }
+
+    public void SetMicVolume(float volume)
+    {
+        _micVolume = Math.Clamp(volume, 0f, 2f);
+    }
+
+    public void SetPeerVolume(string peerId, float volume)
+    {
+        foreach (var (ssrc, pid) in _ssrcToPeerId)
+        {
+            if (pid == peerId)
+            {
+                _jitterBuffer?.SetStreamVolume(ssrc, volume);
+                break;
+            }
+        }
+    }
 
     // ==================== 消息等待 ====================
     private readonly Dictionary<string, TaskCompletionSource<JsonElement>> _pendingMessages = new();
@@ -69,6 +99,13 @@ public partial class MainWindow : Window
     // ==================== 状态 ====================
     private bool _micEnabled;
     private bool _isSpeaking;
+
+    // ==================== 降噪（Phase 2: RNNoise AI 降噪 + Phase 1 门限兜底）====================
+    private RnnoiseDenoiser? _rnnoiseDenoiser;   // RNNoise 实例（中/高档位使用）
+    private float _vadThreshold = 0.03f;          // 语音检测阈值
+    private float _noiseGateThreshold = 0.015f;   // Phase 1 噪声门限（低档位使用）
+    private bool _noiseGateEnabled = true;        // 是否启用 Phase 1 噪声门限
+    private bool _rnnoiseEnabled = false;        // 是否启用 RNNoise
 
     // 音频参数
     private const int SampleRate = 48000;
@@ -90,7 +127,17 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"[ERROR] JoinRoomAsync failed: {ex.GetType().Name}: {ex.Message}");
+                Console.WriteLine($"[ERROR] StackTrace: {ex.StackTrace}");
+                if (ex.InnerException != null)
+                {
+                    Console.WriteLine($"[ERROR] InnerException: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+                    Console.WriteLine($"[ERROR] Inner StackTrace: {ex.InnerException.StackTrace}");
+                }
                 MessageBox.Show($"加入房间失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                // 回到登录窗口
+                var login = new LoginWindow();
+                login.Show();
                 Close();
             }
         };
@@ -126,11 +173,7 @@ public partial class MainWindow : Window
 
     private void TryFindAndSet(string key, string color)
     {
-        if (TryFindResource(key) is SolidColorBrush)
-        {
-            var newBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
-            Resources[key] = newBrush;
-        }
+        Resources[key] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
     }
 
     // ==================== UI 事件 ====================
@@ -145,7 +188,54 @@ public partial class MainWindow : Window
             EnableMic();
     }
 
-    private void NoiseLevel_Click(object sender, RoutedEventArgs e) { }
+    private void NoiseLevel_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is RadioButton btn && btn.Tag is string tag)
+        {
+            switch (tag)
+            {
+                case "off":
+                    _vadThreshold = 0.00f;
+                    _noiseGateThreshold = 0.00f;
+                    _noiseGateEnabled = false;
+                    _rnnoiseEnabled = false;
+                    break;
+                case "low":
+                    _vadThreshold = 0.03f;
+                    _noiseGateThreshold = 0.015f;
+                    _noiseGateEnabled = true;
+                    _rnnoiseEnabled = false;
+                    break;
+                case "medium":
+                    _vadThreshold = 0.05f;
+                    _noiseGateThreshold = 0.00f;
+                    _noiseGateEnabled = false;
+                    _rnnoiseEnabled = true;
+                    break;
+                case "high":
+                    _vadThreshold = 0.10f;
+                    _noiseGateThreshold = 0.00f;
+                    _noiseGateEnabled = false;
+                    _rnnoiseEnabled = true;
+                    break;
+            }
+
+            // 如果正在通话，动态切换降噪实例
+            if (_micEnabled)
+            {
+                if (_rnnoiseEnabled && _rnnoiseDenoiser == null && RnnoiseDenoiser.IsAvailable)
+                {
+                    try { _rnnoiseDenoiser = new RnnoiseDenoiser(); }
+                    catch { /* RNNoise DLL 加载失败时静默失败 */ }
+                }
+                else if (!_rnnoiseEnabled || (_rnnoiseEnabled && !RnnoiseDenoiser.IsAvailable))
+                {
+                    _rnnoiseDenoiser?.Dispose();
+                    _rnnoiseDenoiser = null;
+                }
+            }
+        }
+    }
 
     // 音频设备选择
     private void MicDeviceCombo_Changed(object sender, SelectionChangedEventArgs e)
@@ -158,6 +248,17 @@ public partial class MainWindow : Window
     {
         if (SpeakerDeviceCombo.SelectedItem is DeviceItem item)
             _selectedSpeakerDevice = item.DeviceNumber;
+    }
+
+    // 音量控制
+    private void MasterVolumeSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        SetMasterVolume((float)(e.NewValue / 100.0));
+    }
+
+    private void MicVolumeSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        SetMicVolume((float)(e.NewValue / 100.0));
     }
 
     // ==================== 音频设备枚举 ====================
@@ -278,16 +379,22 @@ public partial class MainWindow : Window
         _recvCts?.Cancel();
         _udpClient?.Dispose(); _udpClient = null;
         _audioOutput?.Stop(); _audioOutput?.Dispose(); _audioOutput = null;
-        _playbackBuffer = null;
+        _jitterBuffer = null;
         _opusEncoder?.Dispose(); _opusEncoder = null;
         _opusDecoder?.Dispose(); _opusDecoder = null;
 
         SendMessage(new { type = "leaveRoom" });
         _ws?.Close(); _ws = null;
-        _sendTransportId = null; _recvTransportId = null; _serverSendEndPoint = null;
+        _sendTransportId = null; _recvTransportId = null; _producerId = null; _serverSendEndPoint = null;
         _peers.Clear(); MembersPanel.Children.Clear(); _pendingMessages.Clear();
 
-        Dispatcher.BeginInvoke(() => Close());
+        // 回到登录窗口
+        Dispatcher.BeginInvoke(() =>
+        {
+            var login = new LoginWindow();
+            login.Show();
+            Close();
+        });
     }
 
     // ==================== WebSocket ====================
@@ -341,7 +448,9 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(() => { RemoveMemberCard(pl); UpdateOnlineCount(); });
                 break;
             case "error":
-                Dispatcher.BeginInvoke(() => MessageBox.Show(msg.GetProperty("message").GetString() ?? "未知错误", "服务器错误", MessageBoxButton.OK, MessageBoxImage.Warning));
+                var errMsg = msg.GetProperty("message").GetString() ?? "未知错误";
+                Console.WriteLine($"[ERROR] Server error: {errMsg}");
+                Dispatcher.BeginInvoke(() => MessageBox.Show(errMsg, "服务器错误", MessageBoxButton.OK, MessageBoxImage.Warning));
                 break;
         }
     }
@@ -355,6 +464,19 @@ public partial class MainWindow : Window
         var msg = await WaitForMessage("consumed");
         var consumerId = msg.GetProperty("consumerId").GetString()!;
         SendMessage(new { type = "resumeConsuming", consumerId });
+
+        // 提取 SSRC 用于 per-peer 音量控制
+        try
+        {
+            if (msg.TryGetProperty("rtpParameters", out var rtpParams) &&
+                rtpParams.TryGetProperty("encodings", out var encodings) &&
+                encodings.GetArrayLength() > 0)
+            {
+                uint ssrc = encodings[0].GetProperty("ssrc").GetUInt32();
+                _ssrcToPeerId[ssrc] = peerId;
+            }
+        }
+        catch { }
 
         // 更新对端
         if (!_peers.ContainsKey(peerId))
@@ -373,16 +495,12 @@ public partial class MainWindow : Window
 
     private void StartRtpReceiver()
     {
-        _playbackBuffer = new BufferedWaveProvider(new WaveFormat(SampleRate, 16, 1))
-        {
-            BufferDuration = TimeSpan.FromSeconds(2),
-            DiscardOnBufferOverflow = true
-        };
+        _jitterBuffer = new AdaptiveJitterBuffer(minDepth: 2, maxDepth: 10);
         _audioOutput = new WaveOutEvent
         {
             DeviceNumber = _selectedSpeakerDevice >= 0 ? _selectedSpeakerDevice : 0
         };
-        _audioOutput.Init(_playbackBuffer);
+        _audioOutput.Init(_jitterBuffer);
         _audioOutput.Play();
 
         _recvCts = new CancellationTokenSource();
@@ -403,9 +521,13 @@ public partial class MainWindow : Window
 
     private void ProcessIncomingRtp(byte[] packet)
     {
-        if (packet.Length < 12 || _opusDecoder == null) return;
+        if (packet.Length < 12 || _jitterBuffer == null) return;
         try
         {
+            // Extract RTP sequence number (bytes 2-3) and SSRC (bytes 8-11)
+            ushort seq = (ushort)((packet[2] << 8) | packet[3]);
+            uint ssrc = (uint)((packet[8] << 24) | (packet[9] << 16) | (packet[10] << 8) | packet[11]);
+
             int cc = packet[0] & 0x0F;
             bool ext = (packet[0] & 0x10) != 0;
             int offset = 12 + cc * 4;
@@ -415,25 +537,13 @@ public partial class MainWindow : Window
             int len = packet.Length - offset;
             if (len <= 0) return;
 
-            byte[] opus = new byte[len];
-            Array.Copy(packet, offset, opus, 0, len);
-
-            short[] decoded = new short[FrameSize * OpusChannels];
-            int n = _opusDecoder.Decode(opus, 0, len, decoded, 0, FrameSize, false);
-            if (n > 0)
-            {
-                // 双声道 → 单声道（取左声道）
-                byte[] pcm = new byte[n * 2];
-                for (int i = 0; i < n; i++)
-                {
-                    short sample = decoded[i * 2]; // L channel
-                    pcm[i * 2] = (byte)(sample & 0xFF);
-                    pcm[i * 2 + 1] = (byte)((sample >> 8) & 0xFF);
-                }
-                _playbackBuffer?.AddSamples(pcm, 0, pcm.Length);
-            }
+            // Feed encoded Opus frame to jitter buffer (decoding happens on playback thread)
+            _jitterBuffer.PushFrame(seq, ssrc, packet, offset, len);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] ProcessIncomingRtp failed: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private void SendRtpAudio(byte[] pcmData)
@@ -471,7 +581,10 @@ public partial class MainWindow : Window
                 _sendTimestamp += (uint)FrameSize;
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] SendRtpAudio failed: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     // ==================== 麦克风 ====================
@@ -494,15 +607,44 @@ public partial class MainWindow : Window
             ControlUserState.Text = "麦克风已开";
             UpdateMicButton(true);
 
+            // 根据当前降噪档位初始化 RNNoise
+            if (_rnnoiseEnabled && RnnoiseDenoiser.IsAvailable)
+            {
+                try { _rnnoiseDenoiser = new RnnoiseDenoiser(); }
+                catch
+                {
+                    // RNNoise DLL 加载失败时回退到 Phase 1
+                    _rnnoiseEnabled = false;
+                    _noiseGateEnabled = true;
+                    _noiseGateThreshold = 0.025f;
+                }
+            }
+            else if (_rnnoiseEnabled && !RnnoiseDenoiser.IsAvailable)
+            {
+                // DLL 不存在，中/高档位自动降级为 Phase 1 门限
+                _rnnoiseEnabled = false;
+                _noiseGateEnabled = true;
+                _noiseGateThreshold = 0.025f;
+            }
+
+            // 每次开麦生成新 SSRC，避免与旧 producer 冲突
+            _sendSsrc = 1000000000u + (uint)new Random().Next(0, 2000000000);
+
             // 发送 produce 请求
             SendMessage(new { type = "produce", kind = "audio", rtpParameters = BuildRtpParameters() });
             _ = WaitForMessage("produced").ContinueWith(t =>
             {
                 Dispatcher.BeginInvoke(() =>
                 {
-                    if (!t.IsCompletedSuccessfully)
+                    if (t.IsCompletedSuccessfully)
                     {
-                        MessageBox.Show("produce 失败: " + t.Exception?.InnerException?.Message, "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                        _producerId = t.Result.GetProperty("producerId").GetString();
+                    }
+                    else
+                    {
+                        var err = t.Exception?.InnerException?.Message ?? "未知错误";
+                        Console.WriteLine($"[ERROR] produce failed: {err}");
+                        MessageBox.Show("produce 失败: " + err, "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                         DisableMic();
                     }
                 });
@@ -510,6 +652,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            Console.WriteLine($"[ERROR] EnableMic failed: {ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine($"[ERROR] StackTrace: {ex.StackTrace}");
             MessageBox.Show($"麦克风开启失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -523,7 +667,17 @@ public partial class MainWindow : Window
             _micCapture.Dispose();
             _micCapture = null;
         }
+
+        // 通知服务器关闭 producer，释放 SSRC
+        if (_producerId != null)
+        {
+            SendMessage(new { type = "closeProducer", producerId = _producerId });
+            _producerId = null;
+        }
+
         _micEnabled = false;
+        _rnnoiseDenoiser?.Dispose();
+        _rnnoiseDenoiser = null;
         ControlUserState.Text = "麦克风已关";
         UpdateMicButton(false);
         SetSpeaking(false);
@@ -533,16 +687,69 @@ public partial class MainWindow : Window
     {
         if (!_micEnabled) return;
 
+        // 计算当前帧的音量峰值（用于 VAD）
         float max = 0;
         for (int i = 0; i < e.BytesRecorded; i += 2)
         {
             float lvl = Math.Abs(BitConverter.ToInt16(e.Buffer, i) / 32768f);
             if (lvl > max) max = lvl;
         }
-        Dispatcher.BeginInvoke(() => SetSpeaking(max > 0.05f));
+        Dispatcher.BeginInvoke(() => SetSpeaking(max > _vadThreshold));
 
+        // 复制音频数据，准备处理
         byte[] pcm = new byte[e.BytesRecorded];
         Array.Copy(e.Buffer, pcm, e.BytesRecorded);
+
+        // Phase 2 降噪：RNNoise AI 降噪（中/高档位）
+        if (_rnnoiseEnabled && _rnnoiseDenoiser != null)
+        {
+            try
+            {
+                pcm = _rnnoiseDenoiser.Process(pcm);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] RNNoise.Process failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        // Phase 1 兜底：简单噪声门限（低档位，或 RNNoise 未就绪时）
+        else if (_noiseGateEnabled && max < _noiseGateThreshold * 3)
+        {
+            for (int i = 0; i < pcm.Length; i += 2)
+            {
+                short sample = BitConverter.ToInt16(pcm, i);
+                float normalized = Math.Abs(sample / 32768f);
+                if (normalized < _noiseGateThreshold)
+                {
+                    // 静音噪声底噪
+                    pcm[i] = 0;
+                    pcm[i + 1] = 0;
+                }
+                else
+                {
+                    // 渐进衰减：越接近门限衰减越多
+                    float ratio = (normalized - _noiseGateThreshold) / (_noiseGateThreshold * 2);
+                    ratio = Math.Clamp(ratio, 0.1f, 1.0f);
+                    sample = (short)(sample * ratio);
+                    pcm[i] = (byte)(sample & 0xFF);
+                    pcm[i + 1] = (byte)((sample >> 8) & 0xFF);
+                }
+            }
+        }
+
+        // 麦克风音量增益
+        if (Math.Abs(_micVolume - 1.0f) > 0.01f)
+        {
+            for (int i = 0; i < pcm.Length; i += 2)
+            {
+                short sample = BitConverter.ToInt16(pcm, i);
+                float gained = sample * _micVolume;
+                short clamped = (short)Math.Clamp(gained, -32768f, 32767f);
+                pcm[i] = (byte)(clamped & 0xFF);
+                pcm[i + 1] = (byte)((clamped >> 8) & 0xFF);
+            }
+        }
+
         SendRtpAudio(pcm);
     }
 
@@ -610,6 +817,30 @@ public partial class MainWindow : Window
         stack.Children.Add(avatarGrid);
         stack.Children.Add(new TextBlock { Text = peerId, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = (Brush)FindResource("TextBrush"), HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 120 });
         stack.Children.Add(new Ellipse { Name = "StatusDot", Width = 14, Height = 14, Fill = micEnabled ? (Brush)FindResource("SuccessBrush") : (Brush)FindResource("DangerBrush"), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) });
+
+        // Per-peer 音量滑块（不显示自己的）
+        if (!isSelf)
+        {
+            var volSlider = new Slider
+            {
+                Name = "PeerVolumeSlider",
+                Width = 100,
+                Minimum = 0,
+                Maximum = 200,
+                Value = 100,
+                TickFrequency = 50,
+                IsSnapToTickEnabled = false,
+                Margin = new Thickness(0, 6, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                ToolTip = $"{peerId} 音量"
+            };
+            volSlider.ValueChanged += (_, args) =>
+            {
+                SetPeerVolume(peerId, (float)(args.NewValue / 100.0));
+            };
+            stack.Children.Add(volSlider);
+        }
+
         border.Child = stack;
 
         border.MouseEnter += (_, _) => { border.Background = (Brush)FindResource("BgHoverBrush"); border.BorderBrush = new SolidColorBrush(Color.FromArgb(60, 148, 163, 184)); };

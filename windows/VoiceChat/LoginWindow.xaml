@@ -1,0 +1,296 @@
+<Window x:Class="VoiceChat.LoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="EchoLink" Height="720" Width="420"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        Background="#f2f3f5"
+        Foreground="#1e1f22"
+        FontFamily="Segoe UI, Microsoft YaHei"
+        ResizeMode="NoResize"
+        BorderThickness="0"
+        UseLayoutRounding="True"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown">
+
+    <Window.Resources>
+        <!-- 颜色资源 -->
+        <Color x:Key="PrimaryColor">#6366f1</Color>
+        <Color x:Key="PrimaryHoverColor">#4f46e5</Color>
+        <Color x:Key="SuccessColor">#10b981</Color>
+        <Color x:Key="DangerColor">#ef4444</Color>
+        <Color x:Key="BgColor">#f2f3f5</Color>
+        <Color x:Key="BgSecondaryColor">#e3e5e8</Color>
+        <Color x:Key="BgCardColor">#ffffff</Color>
+        <Color x:Key="BgInputColor">#e3e5e8</Color>
+        <Color x:Key="BgHoverColor">#d4d7dc</Color>
+        <Color x:Key="TextColor">#1e1f22</Color>
+        <Color x:Key="TextSecondaryColor">#4b5563</Color>
+        <Color x:Key="TextMutedColor">#6b7280</Color>
+        <Color x:Key="BorderColor">#d4d7dc</Color>
+
+        <SolidColorBrush x:Key="PrimaryBrush" Color="{StaticResource PrimaryColor}"/>
+        <SolidColorBrush x:Key="PrimaryHoverBrush" Color="{StaticResource PrimaryHoverColor}"/>
+        <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource SuccessColor}"/>
+        <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}"/>
+        <SolidColorBrush x:Key="BgBrush" Color="{StaticResource BgColor}"/>
+        <SolidColorBrush x:Key="BgSecondaryBrush" Color="{StaticResource BgSecondaryColor}"/>
+        <SolidColorBrush x:Key="BgCardBrush" Color="{StaticResource BgCardColor}"/>
+        <SolidColorBrush x:Key="BgInputBrush" Color="{StaticResource BgInputColor}"/>
+        <SolidColorBrush x:Key="BgHoverBrush" Color="{StaticResource BgHoverColor}"/>
+        <SolidColorBrush x:Key="TextBrush" Color="{StaticResource TextColor}"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource TextSecondaryColor}"/>
+        <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMutedColor}"/>
+        <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}"/>
+
+        <!-- 标题栏按钮样式 -->
+        <Style x:Key="TitleBarButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="40"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                CornerRadius="4" Margin="2">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource BgHoverBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 关闭按钮样式 -->
+        <Style x:Key="CloseButtonStyle" TargetType="Button" BasedOn="{StaticResource TitleBarButtonStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                CornerRadius="4" Margin="2">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#ef4444"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 输入框样式 -->
+        <Style x:Key="LoginInputStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="{StaticResource BgInputBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="14,12"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="CaretBrush" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="12" Padding="{TemplateBinding Padding}">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="false"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsFocused" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource PrimaryBrush}"/>
+                                <Setter TargetName="border" Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect BlurRadius="12" Opacity="0.3" ShadowDepth="0" Color="#6366f1"/>
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 登录按钮样式 -->
+        <Style x:Key="LoginActionButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource PrimaryBrush}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="0,14"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                CornerRadius="12" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource PrimaryHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 主题按钮样式 -->
+        <Style x:Key="ThemeOptionStyle" TargetType="Button">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="14"
+                                Width="{TemplateBinding Width}"
+                                Height="{TemplateBinding Height}">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="8" Opacity="0.3" ShadowDepth="2" Color="Black"/>
+                            </Border.Effect>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource TextBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="{StaticResource BgBrush}" UseLayoutRounding="True" SnapsToDevicePixels="True">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- 自定义标题栏 -->
+            <Border Grid.Row="0" Background="{StaticResource BgSecondaryBrush}" Padding="16,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 标题 -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Width="20" Height="20" CornerRadius="6" Background="{StaticResource PrimaryBrush}" Margin="0,0,8,0">
+                            <TextBlock Text="E" FontSize="12" FontWeight="Bold" Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <TextBlock Text="EchoLink" FontSize="13" FontWeight="SemiBold" 
+                                   Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- 窗口控制按钮 -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <!-- 最小化 -->
+                        <Button Style="{StaticResource TitleBarButtonStyle}" Click="MinimizeBtn_Click" ToolTip="最小化">
+                            <Path Fill="{StaticResource TextMutedBrush}" Data="M0 6h12v2H0z" Width="12" Height="8"/>
+                        </Button>
+                        <!-- 关闭 -->
+                        <Button Style="{StaticResource CloseButtonStyle}" Click="CloseBtn_Click" ToolTip="关闭">
+                            <Path Fill="{StaticResource TextMutedBrush}" Data="M1 1l10 10M11 1L1 11" 
+                                  Stroke="{StaticResource TextMutedBrush}" StrokeThickness="1.5" Width="12" Height="12"/>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- 主内容区 -->
+            <Grid Grid.Row="1">
+                <!-- 背景装饰 -->
+                <Grid.Background>
+                    <RadialGradientBrush Center="0.3,0.2" RadiusX="0.8" RadiusY="0.8">
+                        <GradientStop Color="#146366f1" Offset="0"/>
+                        <GradientStop Color="Transparent" Offset="1"/>
+                    </RadialGradientBrush>
+                </Grid.Background>
+
+                <StackPanel VerticalAlignment="Center" Margin="36,20">
+                    <!-- Logo -->
+                    <Border Width="72" Height="72" CornerRadius="20" Background="{StaticResource PrimaryBrush}"
+                            HorizontalAlignment="Center" Margin="0,0,0,20">
+                        <TextBlock Text="E" FontSize="36" FontWeight="Bold" Foreground="White"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="20" Opacity="0.4" ShadowDepth="0" Color="#6366f1"/>
+                        </Border.Effect>
+                    </Border>
+
+                    <!-- 标题 -->
+                    <TextBlock Text="EchoLink" FontSize="28" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" Foreground="{StaticResource TextBrush}" Margin="0,0,0,4"/>
+                    <TextBlock Text="游戏语音，低延迟沟通" FontSize="14"
+                               HorizontalAlignment="Center" Foreground="{StaticResource TextMutedBrush}"
+                               Margin="0,0,0,28" Opacity="0.8"/>
+
+                    <!-- 输入区域 -->
+                    <StackPanel Orientation="Vertical" Margin="0,0,0,16">
+                        <TextBlock Text="服务器地址" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
+                                   Margin="0,0,0,6"/>
+                        <TextBox x:Name="ServerInput" Text="localhost"
+                                 Style="{StaticResource LoginInputStyle}" Margin="0,0,0,14"/>
+
+                        <TextBlock Text="房间号" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
+                                   Margin="0,0,0,6"/>
+                        <TextBox x:Name="RoomInput" Text="test-room"
+                                 Style="{StaticResource LoginInputStyle}" Margin="0,0,0,14"/>
+
+                        <TextBlock Text="昵称" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
+                                   Margin="0,0,0,6"/>
+                        <TextBox x:Name="PeerInput" Text=""
+                                 Style="{StaticResource LoginInputStyle}" Margin="0,0,0,16"
+                                 KeyDown="PeerInput_KeyDown"/>
+                    </StackPanel>
+
+                    <!-- 登录按钮 -->
+                    <Button x:Name="JoinBtn" Content="进入语音房间"
+                            Style="{StaticResource LoginActionButtonStyle}" Click="JoinBtn_Click"/>
+                    <ProgressBar x:Name="LoadingBar" IsIndeterminate="True" Height="3"
+                                 Visibility="Collapsed" Margin="0,8,0,0"
+                                 Background="Transparent" Foreground="{StaticResource PrimaryBrush}"/>
+
+                    <!-- 主题选择 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+                        <Button x:Name="ThemeDark" Style="{StaticResource ThemeOptionStyle}" Tag="dark"
+                                Background="#1e1f22" BorderBrush="#3f4147"
+                                Click="ThemeBtn_Click" ToolTip="深色" Margin="0,0,6,0"/>
+                        <Button x:Name="ThemeLight" Style="{StaticResource ThemeOptionStyle}" Tag="light"
+                                Background="#f2f3f5" BorderBrush="#d4d7dc"
+                                Click="ThemeBtn_Click" ToolTip="浅色" Margin="0,0,6,0"/>
+                        <Button x:Name="ThemePurple" Style="{StaticResource ThemeOptionStyle}" Tag="purple"
+                                Background="#1a1025" BorderBrush="#3f305e"
+                                Click="ThemeBtn_Click" ToolTip="紫色" Margin="0,0,6,0"/>
+                        <Button x:Name="ThemeOcean" Style="{StaticResource ThemeOptionStyle}" Tag="ocean"
+                                Background="#0a1628" BorderBrush="#1f3d5e"
+                                Click="ThemeBtn_Click" ToolTip="海洋" Margin="0,0,6,0"/>
+                        <Button x:Name="ThemeSunset" Style="{StaticResource ThemeOptionStyle}" Tag="sunset"
+                                Background="#1a0f0a" BorderBrush="#5d3a28"
+                                Click="ThemeBtn_Click" ToolTip="日落"/>
+                    </StackPanel>
+                </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
+</Window>

@@ -90,6 +90,9 @@ export function handleSignaling(
         case "leaveRoom":
           handleLeaveRoom();
           break;
+        case "closeProducer":
+          handleCloseProducer(msg);
+          break;
         default:
           send(ws, { type: "error", message: `Unknown type: ${msg.type}` });
       }
@@ -317,6 +320,32 @@ export function handleSignaling(
     await consumer.resume();
 
     send(ws, { type: "consumerResumed", consumerId });
+  }
+
+  function handleCloseProducer(msg: SignalingMessage): void {
+    if (!currentPeerId || !currentRoom) throw new Error("Not in a room");
+
+    const peer = currentRoom.getPeer(currentPeerId);
+    if (!peer) throw new Error("Peer not found");
+
+    const { producerId } = msg;
+    if (!producerId) throw new Error("producerId required");
+
+    const producer = peer.producers.get(producerId);
+    if (!producer) {
+      console.warn(`[closeProducer] Producer ${producerId} not found for peer ${currentPeerId}`);
+      return;
+    }
+
+    producer.close();
+    peer.producers.delete(producerId);
+    console.log(`[closeProducer] Closed producer ${producerId} for peer ${currentPeerId}`);
+
+    broadcast(currentRoom.id, currentPeerId, {
+      type: "producerClosed",
+      producerId,
+      peerId: currentPeerId,
+    });
   }
 
   async function handleCreatePlainTransport(msg: SignalingMessage): Promise<void> {

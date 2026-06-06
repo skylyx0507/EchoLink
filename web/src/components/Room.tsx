@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMediasoup, NOISE_PRESETS, type NoiseLevel } from "../hooks/useMediasoup";
 import { useTheme } from "../hooks/useTheme";
 import { ThemeSwitcher } from "./ThemeSwitcher";
+import { Downloads } from "./Downloads";
 
 const PROBE_PORTS = [1985, 3000, 8080, 8000, 5000, 4000];
 
@@ -38,6 +40,10 @@ function probePort(host: string): Promise<string> {
 }
 
 export function Room() {
+  const navigate = useNavigate();
+  const { roomId: urlRoomId } = useParams();
+  const [searchParams] = useSearchParams();
+
   const {
     roomState,
     isSpeaking,
@@ -55,22 +61,37 @@ export function Room() {
     setSelectedMic,
     setSelectedSpeaker,
     enumerateAudioDevices,
+    supportsSetSinkId,
   } = useMediasoup();
   const { currentTheme, setTheme, themes } = useTheme();
 
   const [serverAddr, setServerAddr] = useState(
-    () => localStorage.getItem("echolink-server") || window.location.hostname
+    () => searchParams.get("server") || localStorage.getItem("echolink-server") || window.location.hostname
   );
   const [roomId, setRoomId] = useState(
-    () => localStorage.getItem("echolink-room") || "test-room"
+    () => urlRoomId || localStorage.getItem("echolink-room") || "test-room"
   );
   const [peerId, setPeerId] = useState(
-    () => localStorage.getItem("echolink-peer") || `用户${Math.random().toString(36).slice(2, 6)}`
+    () => searchParams.get("peer") || localStorage.getItem("echolink-peer") || `用户${Math.random().toString(36).slice(2, 6)}`
   );
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeviceMenu, setShowDeviceMenu] = useState(false);
   const deviceMenuRef = useRef<HTMLDivElement>(null);
+
+  // 同步 roomState.joined 与 URL：加入后更新 URL，离开后回到首页
+  useEffect(() => {
+    if (roomState.joined && roomState.roomId) {
+      const expectedPath = `/room/${roomState.roomId}`;
+      const expectedSearch = `?server=${encodeURIComponent(serverAddr)}&peer=${encodeURIComponent(peerId)}`;
+      if (window.location.pathname !== expectedPath || window.location.search !== expectedSearch) {
+        navigate(`${expectedPath}${expectedSearch}`, { replace: true });
+      }
+    } else if (!roomState.joined && urlRoomId) {
+      // 已离开房间但 URL 仍停留在 /room/:roomId，回到首页
+      navigate("/", { replace: true });
+    }
+  }, [roomState.joined, roomState.roomId, serverAddr, peerId, urlRoomId, navigate]);
 
   const handleJoin = async () => {
     if (!serverAddr.trim() || !roomId.trim() || !peerId.trim()) {
@@ -105,6 +126,7 @@ export function Room() {
 
   const handleLeave = () => {
     leaveRoom();
+    navigate("/");
   };
 
   const handleToggleMic = () => {
@@ -204,6 +226,7 @@ export function Room() {
                 {joining ? "加入中..." : "进入语音房间"}
               </button>
             </div>
+            <Downloads />
           </div>
         </div>
       </div>
@@ -389,12 +412,16 @@ export function Room() {
                     <select
                       value={selectedSpeaker}
                       onChange={(e) => setSelectedSpeaker(e.target.value)}
+                      disabled={!supportsSetSinkId}
                     >
                       {speakerDevices.length === 0 && <option value="">未检测到设备</option>}
                       {speakerDevices.map((d) => (
                         <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
                       ))}
                     </select>
+                    {!supportsSetSinkId && (
+                      <p className="device-hint">当前浏览器不支持切换扬声器输出</p>
+                    )}
                   </div>
                 </div>
               )}

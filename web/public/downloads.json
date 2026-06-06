@@ -1,0 +1,13 @@
+{
+  "clients": [
+    {
+      "name": "EchoLink Windows 客户端",
+      "version": "1.0.0",
+      "platform": "windows",
+      "url": "/downloads/EchoLink-Windows-Setup.exe",
+      "size": "待打包",
+      "description": "Windows 桌面客户端，完整功能支持，低延迟语音通话"
+    }
+  ],
+  "lastUpdated": "2025-06-06"
+}

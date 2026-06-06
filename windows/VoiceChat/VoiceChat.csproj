@@ -1,7 +1,7 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -12,6 +12,15 @@
     <PackageReference Include="Concentus" Version="2.2.2" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="WebSocketSharp" Version="1.0.3-rc11" />
+  </ItemGroup>
+
+  <!-- RNNoise 原生 DLL：编译时复制到输出目录 -->
+  <!-- 开发者只需编译一次 DLL 放到 lib/ 目录，最终用户无需编译 -->
+  <ItemGroup>
+    <None Include="lib\librnnoise.dll" Condition="Exists('lib\librnnoise.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>librnnoise.dll</TargetPath>
+    </None>
   </ItemGroup>
 
 </Project>
