@@ -10,7 +10,7 @@ export const config = {
   // mediasoup Worker settings
   worker: {
     rtcMinPort: parseInt(process.env.RTC_MIN_PORT || "10000", 10),
-    rtcMaxPort: parseInt(process.env.RTC_MAX_PORT || "10100", 10),
+    rtcMaxPort: parseInt(process.env.RTC_MAX_PORT || "59999", 10),
     logLevel: "warn" as mediasoupTypes.WorkerLogLevel,
     logTags: [
       "info",

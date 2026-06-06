@@ -50,7 +50,7 @@ export function handleSignaling(
   ws: WebSocket,
   rooms: Map<string, Room>,
   roomClients: Map<string, Set<WebSocket>>,
-  worker: mediasoupTypes.Worker
+  getNextWorker: () => mediasoupTypes.Worker
 ): void {
   let currentPeerId: string | null = null;
   let currentRoom: Room | null = null;
@@ -120,7 +120,7 @@ export function handleSignaling(
     console.log(`[handleJoinRoom] Room lookup: ${room ? 'found' : 'not found'}`);
     if (!room) {
       console.log(`[handleJoinRoom] Creating new room: ${roomId}`);
-      room = await Room.create(roomId, worker);
+      room = await Room.create(roomId, getNextWorker());
       rooms.set(roomId, room);
       console.log(`[handleJoinRoom] Room created and stored`);
     }

@@ -2,15 +2,15 @@ import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { types as mediasoupTypes } from "mediasoup";
 import { config } from "./config";
-import { createWorker } from "./mediasoupWorker";
+import { createWorkerPool, getNextWorker, getWorkerStats, closeAllWorkers } from "./mediasoupWorker";
 import { Room } from "./room";
 import { handleSignaling } from "./signaling";
 
 /**
- * Entry point: starts HTTP server + WebSocket server + mediasoup Worker.
+ * Entry point: starts HTTP server + WebSocket server + mediasoup Worker pool.
  *
  * Startup sequence:
- * 1. Create mediasoup Worker (spawns C++ subprocess)
+ * 1. Create mediasoup Worker pool (one Worker per CPU core)
  * 2. Start HTTP server (for health checks / future REST API)
  * 3. Start WebSocket server on top of HTTP server
  * 4. Handle incoming WebSocket connections via signaling module
@@ -21,14 +21,21 @@ const rooms = new Map<string, Room>();
 const roomClients = new Map<string, Set<WebSocket>>();
 
 async function main(): Promise<void> {
-  // 1. Create mediasoup Worker
-  const worker = await createWorker();
+  // 1. Create mediasoup Worker pool
+  const workers = await createWorkerPool();
+  console.log(`Worker pool ready: ${workers.length} Workers`);
 
   // 2. HTTP server
-  const httpServer = http.createServer((req, res) => {
+  const httpServer = http.createServer(async (req, res) => {
     if (req.url === "/health") {
+      const stats = await getWorkerStats();
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", pid: worker.pid }));
+      res.end(JSON.stringify({
+        status: "ok",
+        workers: workers.length,
+        rooms: rooms.size,
+        workerPids: stats.map((s) => s.pid),
+      }));
       return;
     }
     res.writeHead(404);
@@ -40,13 +47,13 @@ async function main(): Promise<void> {
 
   wss.on("connection", (ws: WebSocket) => {
     console.log("New WebSocket connection");
-    handleSignaling(ws, rooms, roomClients, worker);
+    handleSignaling(ws, rooms, roomClients, getNextWorker);
   });
 
   // 4. Start listening
   httpServer.listen(config.listenPort, () => {
     console.log(`Server listening on port ${config.listenPort}`);
-    console.log(`mediasoup Worker PID: ${worker.pid}`);
+    console.log(`Workers: ${workers.map((w) => w.pid).join(", ")}`);
     console.log(`Health check: http://localhost:${config.listenPort}/health`);
   });
 
@@ -55,7 +62,7 @@ async function main(): Promise<void> {
     console.log("Shutting down...");
     wss.close();
     httpServer.close();
-    worker.close();
+    closeAllWorkers();
     process.exit(0);
   });
 }
