@@ -3,6 +3,9 @@ FROM node:22-slim
 
 WORKDIR /app
 
+# 使用国内 Debian 镜像加速构建
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+
 # 安装 mediasoup 依赖（含 pip3 用于 mediasoup 构建）
 RUN apt-get update && apt-get install -y \
     python3 \
