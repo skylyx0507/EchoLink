@@ -105,47 +105,64 @@ export function handleSignaling(
   });
 
   async function handleJoinRoom(msg: SignalingMessage): Promise<void> {
+    console.log(`[handleJoinRoom] Received joinRoom for roomId=${msg.roomId}, peerId=${msg.peerId}`);
     const { roomId, peerId } = msg;
     if (!roomId || !peerId) throw new Error("roomId and peerId required");
 
     // Leave previous room if any
-    if (currentRoom && currentPeerId) handleLeaveRoom();
+    if (currentRoom && currentPeerId) {
+      console.log(`[handleJoinRoom] Leaving previous room ${currentRoom.id} as ${currentPeerId}`);
+      handleLeaveRoom();
+    }
 
     // Get or create room
     let room = rooms.get(roomId);
+    console.log(`[handleJoinRoom] Room lookup: ${room ? 'found' : 'not found'}`);
     if (!room) {
+      console.log(`[handleJoinRoom] Creating new room: ${roomId}`);
       room = await Room.create(roomId, worker);
       rooms.set(roomId, room);
+      console.log(`[handleJoinRoom] Room created and stored`);
     }
 
     room.addPeer(peerId);
     currentPeerId = peerId;
     currentRoom = room;
+    console.log(`[handleJoinRoom] Peer ${peerId} added to room ${roomId}`);
 
     // Track WebSocket in room
     if (!roomClients.has(roomId)) roomClients.set(roomId, new Set());
     roomClients.get(roomId)!.add(ws);
+    console.log(`[handleJoinRoom] WebSocket tracked in roomClients`);
 
     // Collect existing peers (excluding self)
     const existingPeers = room.getPeerIds().filter((id) => id !== peerId);
+    console.log(`[handleJoinRoom] Existing peers: ${existingPeers.length}`);
 
     // Collect existing producers from other peers
-    const existingProducers = room.getOtherProducers(peerId).map((p) => ({
-      producerId: p.id,
-      peerId: (p.appData as Record<string, unknown>)?.peerId as string,
-    }));
+    const existingProducers = room.getOtherProducers(peerId)
+      .filter(p => p.appData && (p.appData as any).peerId)
+      .map((p) => ({
+        producerId: p.id,
+        peerId: (p.appData as Record<string, unknown>)?.peerId as string,
+      }));
+    console.log(`[handleJoinRoom] Existing producers: ${existingProducers.length}`);
 
-    send(ws, {
+    const joinedRoomMsg = {
       type: "joinedRoom",
       roomId,
       peerId,
       rtpCapabilities: room.getRtpCapabilities(),
       existingPeers,
       existingProducers,
-    });
+    };
+    console.log(`[handleJoinRoom] Sending joinedRoom to ${peerId}:`, JSON.stringify({ existingPeers, existingProducersCount: existingProducers.length }));
+    send(ws, joinedRoomMsg);
+    console.log(`[handleJoinRoom] joinedRoom sent successfully`);
 
     // Notify others
     broadcast(roomId, peerId, { type: "peerJoined", peerId });
+    console.log(`[handleJoinRoom] peerJoined broadcasted`);
   }
 
   async function handleCreateTransport(msg: SignalingMessage): Promise<void> {
@@ -223,7 +240,6 @@ export function handleSignaling(
 
     producer.on("transportclose", () => {
       peer.producers.delete(producer.id);
-      // 广播 producer 关闭，更新麦克风状态
       if (currentRoom && currentPeerId) {
         broadcast(currentRoom.id, currentPeerId, {
           type: "producerClosed",

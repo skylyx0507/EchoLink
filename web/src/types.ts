@@ -12,6 +12,7 @@ export interface JoinedRoomMessage {
   roomId: string;
   peerId: string;
   rtpCapabilities: types.RtpCapabilities;
+  existingPeers: string[];
   existingProducers: Array<{ producerId: string; peerId: string }>;
 }
 

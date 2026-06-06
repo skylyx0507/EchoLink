@@ -104,9 +104,11 @@ export class Room {
     });
 
     transport.on("icestatechange", (state) => {
-      if (state === "disconnected" || state === "closed") {
-        console.log(`Transport ICE state: ${state} [id:${transport.id}]`);
-      }
+      console.log(`WebRtcTransport ICE state: ${state} [id:${transport.id}]`);
+    });
+
+    transport.on("dtlsstatechange", (state) => {
+      console.log(`WebRtcTransport DTLS state: ${state} [id:${transport.id}]`);
     });
 
     return transport;

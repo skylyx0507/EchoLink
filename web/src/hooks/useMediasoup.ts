@@ -7,9 +7,8 @@ import type {
   RoomState,
   TransportCreatedMessage,
   ConsumedMessage,
+  JoinedRoomMessage,
 } from "../types";
-
-const WS_URL = `ws://${window.location.host}/ws`;
 
 // 降噪档位配置
 export type NoiseLevel = "off" | "low" | "medium" | "high";
@@ -20,6 +19,11 @@ export const NOISE_PRESETS: Record<NoiseLevel, { label: string; gateThreshold: n
   medium: { label: "中", gateThreshold: 0.02, vadThreshold: 0.03 },
   high: { label: "高", gateThreshold: 0.04, vadThreshold: 0.05 },
 };
+
+export interface AudioDevice {
+  deviceId: string;
+  label: string;
+}
 
 export function useMediasoup() {
   const [roomState, setRoomState] = useState<RoomState>({
@@ -32,6 +36,14 @@ export function useMediasoup() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [noiseLevel, setNoiseLevel] = useState<NoiseLevel>("medium");
   const [latency, setLatency] = useState<number>(0);
+  const [micDevices, setMicDevices] = useState<AudioDevice[]>([]);
+  const [speakerDevices, setSpeakerDevices] = useState<AudioDevice[]>([]);
+  const [selectedMic, setSelectedMic] = useState<string>(
+    () => localStorage.getItem("echolink-mic") || ""
+  );
+  const [selectedSpeaker, setSelectedSpeaker] = useState<string>(
+    () => localStorage.getItem("echolink-speaker") || ""
+  );
 
   const wsRef = useRef<WebSocket | null>(null);
   const deviceRef = useRef<Device | null>(null);
@@ -51,6 +63,14 @@ export function useMediasoup() {
   const messageHandlersRef = useRef<Map<string, (msg: SignalingMessage) => void>>(new Map());
   const latencyIntervalRef = useRef<number | null>(null);
 
+  // 持久化设备选择
+  useEffect(() => {
+    if (selectedMic) localStorage.setItem("echolink-mic", selectedMic);
+  }, [selectedMic]);
+  useEffect(() => {
+    if (selectedSpeaker) localStorage.setItem("echolink-speaker", selectedSpeaker);
+  }, [selectedSpeaker]);
+
   // 发送信令消息
   const send = useCallback((msg: SignalingMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -58,13 +78,25 @@ export function useMediasoup() {
     }
   }, []);
 
-  // 等待特定类型的消息
-  const waitForMessage = useCallback((type: string): Promise<SignalingMessage> => {
-    return new Promise((resolve) => {
+  // 等待特定类型的消息（带超时）
+  const waitForMessage = useCallback((type: string, timeoutMs = 15000): Promise<SignalingMessage> => {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        messageHandlersRef.current.delete(type);
+        reject(new Error(`等待 ${type} 超时`));
+      }, timeoutMs);
+
       const handler = (msg: SignalingMessage) => {
+        if (msg.type === "error") {
+          // 忽略不相关的错误消息，让超时处理
+          console.warn(`waitForMessage(${type}): ignoring error: ${msg.message}`);
+          return;
+        }
+        clearTimeout(timer);
         messageHandlersRef.current.delete(type);
         resolve(msg);
       };
+
       messageHandlersRef.current.set(type, handler);
     });
   }, []);
@@ -93,8 +125,10 @@ export function useMediasoup() {
 
       const handleConnect = (m: SignalingMessage) => {
         if (m.type === "transportConnected" && m.transportId === transport.id) {
+          messageHandlersRef.current.delete("transportConnected");
           callback();
-        } else if (m.type === "error") {
+        } else if (m.type === "error" && (m as any).transportId === transport.id) {
+          messageHandlersRef.current.delete("transportConnected");
           errback(new Error(m.message));
         }
       };
@@ -108,8 +142,10 @@ export function useMediasoup() {
 
         const handleProduced = (m: SignalingMessage) => {
           if (m.type === "produced") {
+            messageHandlersRef.current.delete("produced");
             callback({ id: m.producerId });
           } else if (m.type === "error") {
+            messageHandlersRef.current.delete("produced");
             errback(new Error(m.message));
           }
         };
@@ -148,8 +184,10 @@ export function useMediasoup() {
 
       const handleConnect = (m: SignalingMessage) => {
         if (m.type === "transportConnected" && m.transportId === transport.id) {
+          messageHandlersRef.current.delete("transportConnected");
           callback();
-        } else if (m.type === "error") {
+        } else if (m.type === "error" && (m as any).transportId === transport.id) {
+          messageHandlersRef.current.delete("transportConnected");
           errback(new Error(m.message));
         }
       };
@@ -191,22 +229,44 @@ export function useMediasoup() {
 
         consumersRef.current.set(consumer.id, consumer);
 
+        console.log(`Consumer created: ${consumer.id} for peer ${peerId}, track readyState: ${consumer.track.readyState}, muted: ${consumer.track.muted}`);
+
         // 创建音频元素播放
         const audioElement = new Audio();
         audioElement.srcObject = new MediaStream([consumer.track]);
         audioElement.autoplay = true;
         audioElement.muted = false;
+        audioElement.volume = 1.0;
         document.body.appendChild(audioElement);
+
+        // 应用选中的扬声器设备
+        if (selectedSpeaker && typeof (audioElement as any).setSinkId === "function") {
+          (audioElement as any).setSinkId(selectedSpeaker).catch(() => {});
+        }
 
         // 显式播放，处理浏览器自动播放策略
         audioElement.play().catch((e) => {
           console.warn("Audio autoplay blocked:", e);
         });
 
-        // 监听 track unmute 事件再次尝试播放
-        consumer.track.onunmute = () => {
-          audioElement.play().catch(() => {});
+        // 监听 track 状态变化
+        consumer.track.onmute = () => {
+          console.log(`Consumer track muted: ${consumer.id} for peer ${peerId}`);
         };
+        consumer.track.onunmute = () => {
+          console.log(`Consumer track unmuted: ${consumer.id} for peer ${peerId}, playing audio`);
+          audioElement.play().catch((e) => {
+            console.warn("Audio play failed on unmute:", e);
+          });
+        };
+        consumer.track.onended = () => {
+          console.log(`Consumer track ended: ${consumer.id} for peer ${peerId}`);
+        };
+
+        // 监听 consumer 状态
+        consumer.on("transportclose", () => {
+          console.log(`Consumer transport closed: ${consumer.id}`);
+        });
 
         // 更新对等端信息
         const peer = peersRef.current.get(peerId) || { peerId };
@@ -223,11 +283,12 @@ export function useMediasoup() {
 
         // 恢复消费
         send({ type: "resumeConsuming", consumerId: consumer.id });
+        console.log(`Resume consuming sent for consumer: ${consumer.id}`);
       } catch (err) {
         console.error("Failed to consume:", err);
       }
     },
-    [send, waitForMessage]
+    [send, waitForMessage, selectedSpeaker]
   );
 
   // 音量检测
@@ -307,6 +368,51 @@ export function useMediasoup() {
     setLatency(0);
   }, []);
 
+  // 枚举音频设备
+  const enumerateAudioDevices = useCallback(async () => {
+    try {
+      // 请求临时权限以获取设备标签
+      const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tempStream.getTracks().forEach(t => t.stop());
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const mics: AudioDevice[] = [];
+      const speakers: AudioDevice[] = [];
+      for (const d of devices) {
+        if (d.deviceId === "continue") continue;
+        if (d.kind === "audioinput") {
+          mics.push({ deviceId: d.deviceId, label: d.label || `麦克风 ${mics.length + 1}` });
+        } else if (d.kind === "audiooutput") {
+          speakers.push({ deviceId: d.deviceId, label: d.label || `扬声器 ${speakers.length + 1}` });
+        }
+      }
+      setMicDevices(mics);
+      setSpeakerDevices(speakers);
+      // 恢复保存的设备选择，或默认选中第一个
+      const savedMic = localStorage.getItem("echolink-mic");
+      const savedSpeaker = localStorage.getItem("echolink-speaker");
+      if (mics.length > 0) {
+        const micId = (savedMic && mics.some(d => d.deviceId === savedMic)) ? savedMic : mics[0].deviceId;
+        setSelectedMic(micId);
+      }
+      if (speakers.length > 0) {
+        const spkId = (savedSpeaker && speakers.some(d => d.deviceId === savedSpeaker)) ? savedSpeaker : speakers[0].deviceId;
+        setSelectedSpeaker(spkId);
+      }
+    } catch (err) {
+      console.error("Failed to enumerate audio devices:", err);
+    }
+  }, []);
+
+  // 切换扬声器时，更新已有音频元素的输出设备
+  const applySpeakerToAudioElements = useCallback((deviceId: string) => {
+    peersRef.current.forEach((peer) => {
+      if (peer.audioElement && typeof peer.audioElement.setSinkId === "function") {
+        (peer.audioElement as any).setSinkId(deviceId).catch(() => {});
+      }
+    });
+  }, []);
+
   // 开启麦克风（带降噪）
   const enableMic = useCallback(async () => {
     const sendTransport = sendTransportRef.current;
@@ -323,14 +429,18 @@ export function useMediasoup() {
     }
 
     try {
-      // 获取音频流 - 结合浏览器原生降噪
+      // 获取音频流 - 使用选中的麦克风设备
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: noiseLevel !== "off",
+        autoGainControl: true,
+        sampleRate: 48000,
+      };
+      if (selectedMic) {
+        audioConstraints.deviceId = { exact: selectedMic };
+      }
       const rawStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: noiseLevel !== "off",
-          autoGainControl: true,
-          sampleRate: 48000,
-        },
+        audio: audioConstraints,
       });
 
       rawStreamRef.current = rawStream;
@@ -391,7 +501,7 @@ export function useMediasoup() {
     } catch (err) {
       console.error("Failed to enable mic:", err);
     }
-  }, [startSpeakingDetection, noiseLevel, startLatencyMonitoring]);
+  }, [startSpeakingDetection, noiseLevel, startLatencyMonitoring, selectedMic]);
 
   // 关闭麦克风
   const disableMic = useCallback(() => {
@@ -419,8 +529,8 @@ export function useMediasoup() {
 
   // 加入房间
   const joinRoom = useCallback(
-    async (roomId: string, peerId: string) => {
-      const ws = new WebSocket(WS_URL);
+    async (serverUrl: string, roomId: string, peerId: string) => {
+      const ws = new WebSocket(serverUrl);
       wsRef.current = ws;
 
       // 消息路由
@@ -431,6 +541,16 @@ export function useMediasoup() {
         const handler = messageHandlersRef.current.get(msg.type);
         if (handler) {
           handler(msg);
+          return;
+        }
+
+        // 错误消息：投递给所有 pending handler（不自动删除）
+        // waitForMessage 的 handler 忽略错误后继续等待正常响应
+        // transportConnected/produced 的 handler 处理错误后自行清理
+        if (msg.type === "error") {
+          for (const h of messageHandlersRef.current.values()) {
+            h(msg);
+          }
           return;
         }
 
@@ -446,7 +566,11 @@ export function useMediasoup() {
             const closedPeer = peersRef.current.get(closedPeerId);
             if (closedPeer) {
               closedPeer.audioConsumer?.close();
-              closedPeer.audioElement?.remove();
+              if (closedPeer.audioElement) {
+                closedPeer.audioElement.pause();
+                closedPeer.audioElement.srcObject = null;
+                closedPeer.audioElement.remove();
+              }
               closedPeer.audioConsumer = undefined;
               closedPeer.audioElement = undefined;
               closedPeer.micEnabled = false;
@@ -461,11 +585,13 @@ export function useMediasoup() {
           }
 
           case "peerJoined": {
+            console.log("[peerJoined] peer:", msg.peerId);
             const peer: PeerInfo = { peerId: msg.peerId };
             peersRef.current.set(msg.peerId, peer);
             setRoomState((prev) => {
               const newPeers = new Map(prev.peers);
               newPeers.set(msg.peerId, peer);
+              console.log("[peerJoined] updated peers:", Array.from(newPeers.keys()));
               return { ...prev, peers: newPeers };
             });
             break;
@@ -475,7 +601,11 @@ export function useMediasoup() {
             const peer = peersRef.current.get(msg.peerId);
             if (peer) {
               peer.audioConsumer?.close();
-              peer.audioElement?.remove();
+              if (peer.audioElement) {
+                peer.audioElement.pause();
+                peer.audioElement.srcObject = null;
+                peer.audioElement.remove();
+              }
               peersRef.current.delete(msg.peerId);
             }
             setRoomState((prev) => {
@@ -494,17 +624,28 @@ export function useMediasoup() {
 
       return new Promise<void>((resolve, reject) => {
         ws.onopen = () => {
+          console.log("[joinRoom] WebSocket opened, sending joinRoom");
           send({ type: "joinRoom", roomId, peerId });
+          console.log("[joinRoom] joinRoom message sent");
         };
 
         ws.onerror = (error) => {
-          console.error("WebSocket error:", error);
+          console.error("[joinRoom] WebSocket error:", error);
           reject(new Error("WebSocket connection failed"));
+        };
+
+        ws.onclose = (event) => {
+          console.log(`[joinRoom] WebSocket closed: code=${event.code}, reason=${event.reason}`);
         };
 
         // 等待 joinedRoom 响应
         waitForMessage("joinedRoom").then(async (msg) => {
-          const joinedMsg = msg as any;
+          const joinedMsg = msg as JoinedRoomMessage;
+          console.log("[joinRoom] received joinedRoom:", {
+            roomId: joinedMsg.roomId,
+            existingPeers: joinedMsg.existingPeers,
+            existingProducers: joinedMsg.existingProducers,
+          });
 
           // 初始化 mediasoup Device
           const device = new Device();
@@ -515,10 +656,11 @@ export function useMediasoup() {
 
           // 初始化已有的 peers
           const initialPeers = new Map<string, PeerInfo>();
-          for (const existingPeerId of joinedMsg.existingPeers || []) {
+          for (const existingPeerId of joinedMsg.existingPeers) {
             initialPeers.set(existingPeerId, { peerId: existingPeerId });
             peersRef.current.set(existingPeerId, { peerId: existingPeerId });
           }
+          console.log("[joinRoom] initialPeers:", Array.from(initialPeers.keys()));
 
           setRoomState({
             roomId: joinedMsg.roomId,
@@ -546,11 +688,14 @@ export function useMediasoup() {
           }
           pendingConsumesRef.current = [];
 
+          // 枚举音频设备
+          enumerateAudioDevices();
+
           resolve();
         }).catch(reject);
       });
     },
-    [send, waitForMessage, createSendTransport, createRecvTransport, consumeRemote]
+    [send, waitForMessage, createSendTransport, createRecvTransport, consumeRemote, enumerateAudioDevices]
   );
 
   // 离开房间
@@ -572,7 +717,11 @@ export function useMediasoup() {
     // 移除音频元素
     peersRef.current.forEach((p) => {
       p.audioConsumer?.close();
-      p.audioElement?.remove();
+      if (p.audioElement) {
+        p.audioElement.pause();
+        p.audioElement.srcObject = null;
+        p.audioElement.remove();
+      }
     });
     peersRef.current.clear();
 
@@ -609,5 +758,15 @@ export function useMediasoup() {
     enableMic,
     disableMic,
     setNoiseLevel,
+    micDevices,
+    speakerDevices,
+    selectedMic,
+    selectedSpeaker,
+    setSelectedMic,
+    setSelectedSpeaker: (id: string) => {
+      setSelectedSpeaker(id);
+      applySpeakerToAudioElements(id);
+    },
+    enumerateAudioDevices,
   };
 }

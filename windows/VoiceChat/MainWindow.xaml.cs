@@ -22,16 +22,16 @@ public partial class MainWindow : Window
 {
     // ==================== 网络 ====================
     private WebSocket? _ws;
-    private string _serverUrl = "ws://localhost:3000";
+    private string _serverUrl = "";
     private string _roomId = "";
     private string _peerId = "";
 
     // ==================== mediasoup ====================
     private string? _sendTransportId;
+    private string? _recvTransportId;
 
     // ==================== RTP ====================
-    private UdpClient? _sendUdp;
-    private UdpClient? _recvUdp;
+    private UdpClient? _udpClient;
     private IPEndPoint? _serverSendEndPoint;
     private CancellationTokenSource? _recvCts;
 
@@ -57,7 +57,7 @@ public partial class MainWindow : Window
     // ==================== RTP 状态 ====================
     private ushort _sendSeq;
     private uint _sendTimestamp;
-    private readonly uint _sendSsrc = (uint)new Random().Next(100000, 999999);
+    private readonly uint _sendSsrc = 1000000000u + (uint)new Random().Next(0, 2000000000);
 
     // ==================== 成员 ====================
     private record PeerInfo(string PeerId, bool MicEnabled);
@@ -75,61 +75,65 @@ public partial class MainWindow : Window
     private const int OpusChannels = 2; // mediasoup 要求 Opus 2 通道
     private const int FrameSize = 960; // 20ms @ 48kHz
 
-    // 主题
-    private string _currentTheme = "dark";
-
-    private static readonly Dictionary<string, (string bg, string bgSecondary, string bgCard, string bgInput, string bgHover, string primary, string success, string danger)> ThemeColors = new()
-    {
-        ["dark"] = ("#1e1f22", "#2b2d31", "#313338", "#383a40", "#404249", "#5865f2", "#23a559", "#f23f43"),
-        ["light"] = ("#f2f3f5", "#e3e5e8", "#ffffff", "#ebedef", "#d4d7dc", "#5865f2", "#23a559", "#f23f43"),
-        ["purple"] = ("#1a1025", "#241830", "#2d1f3d", "#362850", "#3f305e", "#9b59b6", "#2ecc71", "#e74c3c"),
-        ["ocean"] = ("#0a1628", "#0f2035", "#142a42", "#1a3350", "#1f3d5e", "#0088cc", "#00b894", "#e17055"),
-        ["sunset"] = ("#1a0f0a", "#2d1a0f", "#3d2518", "#4d2f1f", "#5d3a28", "#e67e22", "#27ae60", "#c0392b"),
-    };
-
-    public MainWindow()
+    public MainWindow(string serverUrl, string roomId, string peerId, string theme)
     {
         InitializeComponent();
-        Loaded += (_, _) =>
+        _serverUrl = serverUrl;
+        _roomId = roomId;
+        _peerId = peerId;
+        ApplyTheme(theme);
+        Loaded += async (_, _) =>
         {
-            PeerInput.Text = $"用户{new Random().Next(1000, 9999)}";
-            PeerInput.Focus();
+            try
+            {
+                await JoinRoomAsync();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"加入房间失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                Close();
+            }
         };
     }
 
-    // ==================== UI 事件 ====================
-
-    private async void JoinBtn_Click(object sender, RoutedEventArgs e)
+    private void ApplyTheme(string theme)
     {
-        var server = ServerInput.Text.Trim();
-        var room = RoomInput.Text.Trim();
-        var peer = PeerInput.Text.Trim();
-
-        if (string.IsNullOrEmpty(room) || string.IsNullOrEmpty(peer))
+        var colors = new Dictionary<string, (string bg, string bgSecondary, string bgCard, string bgInput, string bgHover, string primary, string success, string danger)>
         {
-            ShowError("房间号和昵称不能为空");
-            return;
-        }
+            ["dark"] = ("#1e1f22", "#2b2d31", "#313338", "#383a40", "#404249", "#5865f2", "#23a559", "#f23f43"),
+            ["light"] = ("#f2f3f5", "#e3e5e8", "#ffffff", "#ebedef", "#d4d7dc", "#5865f2", "#23a559", "#f23f43"),
+            ["purple"] = ("#1a1025", "#241830", "#2d1f3d", "#362850", "#3f305e", "#9b59b6", "#2ecc71", "#e74c3c"),
+            ["ocean"] = ("#0a1628", "#0f2035", "#142a42", "#1a3350", "#1f3d5e", "#0088cc", "#00b894", "#e17055"),
+            ["sunset"] = ("#1a0f0a", "#2d1a0f", "#3d2518", "#4d2f1f", "#5d3a28", "#e67e22", "#27ae60", "#c0392b"),
+        };
 
-        _serverUrl = server;
-        _roomId = room;
-        _peerId = peer;
+        if (!colors.TryGetValue(theme, out var c)) return;
 
-        JoinBtn.IsEnabled = false;
-        JoinBtn.Content = "加入中...";
-        HideError();
+        TryFindAndSet("BgBrush", c.bg);
+        TryFindAndSet("BgSecondaryBrush", c.bgSecondary);
+        TryFindAndSet("BgCardBrush", c.bgCard);
+        TryFindAndSet("BgInputBrush", c.bgInput);
+        TryFindAndSet("BgHoverBrush", c.bgHover);
+        TryFindAndSet("PrimaryBrush", c.primary);
+        TryFindAndSet("PrimaryHoverBrush", c.primary);
+        TryFindAndSet("SuccessBrush", c.success);
+        TryFindAndSet("DangerBrush", c.danger);
+        TryFindAndSet("TextBrush", theme == "light" ? "#1e1f22" : "#f2f3f5");
+        TryFindAndSet("TextMutedBrush", theme == "light" ? "#6b7280" : "#949ba4");
+        TryFindAndSet("TextSecondaryBrush", theme == "light" ? "#4b5563" : "#b5bac1");
+        TryFindAndSet("BorderBrush", theme == "light" ? "#d4d7dc" : "#3f4147");
+    }
 
-        try
+    private void TryFindAndSet(string key, string color)
+    {
+        if (TryFindResource(key) is SolidColorBrush)
         {
-            await JoinRoomAsync();
-        }
-        catch (Exception ex)
-        {
-            ShowError(ex.Message);
-            JoinBtn.IsEnabled = true;
-            JoinBtn.Content = "进入语音房间";
+            var newBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
+            Resources[key] = newBrush;
         }
     }
+
+    // ==================== UI 事件 ====================
 
     private void LeaveBtn_Click(object sender, RoutedEventArgs e) => LeaveRoom();
 
@@ -154,38 +158,6 @@ public partial class MainWindow : Window
     {
         if (SpeakerDeviceCombo.SelectedItem is DeviceItem item)
             _selectedSpeakerDevice = item.DeviceNumber;
-    }
-
-    // 主题切换
-    private void ThemeBtn_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button btn && btn.Tag is string theme)
-        {
-            ApplyTheme(theme);
-            _currentTheme = theme;
-        }
-    }
-
-    private void ApplyTheme(string theme)
-    {
-        if (!ThemeColors.TryGetValue(theme, out var c)) return;
-
-        TryFindAndSet("BgBrush", c.bg);
-        TryFindAndSet("BgSecondaryBrush", c.bgSecondary);
-        TryFindAndSet("BgCardBrush", c.bgCard);
-        TryFindAndSet("BgInputBrush", c.bgInput);
-        TryFindAndSet("BgHoverBrush", c.bgHover);
-        TryFindAndSet("PrimaryBrush", c.primary);
-        TryFindAndSet("SuccessBrush", c.success);
-        TryFindAndSet("DangerBrush", c.danger);
-    }
-
-    private void TryFindAndSet(string key, string color)
-    {
-        if (TryFindResource(key) is SolidColorBrush brush)
-        {
-            brush.Color = (Color)ColorConverter.ConvertFromString(color);
-        }
     }
 
     // ==================== 音频设备枚举 ====================
@@ -223,15 +195,14 @@ public partial class MainWindow : Window
         _opusEncoder.UseInbandFEC = true;
         _opusDecoder = new OpusDecoder(SampleRate, OpusChannels);
 
-        // 2. 初始化 UDP
-        _sendUdp = new UdpClient(0);
-        _recvUdp = new UdpClient(0);
+        // 2. 初始化 UDP（收发共用同一个端口）
+        _udpClient = new UdpClient(0);
 
         // 3. 连接 WebSocket
         _ws = new WebSocket(_serverUrl);
         _ws.OnMessage += (_, evt) => Dispatcher.BeginInvoke(() => HandleMessage(evt.Data));
-        _ws.OnError += (_, evt) => Dispatcher.BeginInvoke(() => ShowError("连接失败: " + evt.Message));
-        _ws.OnClose += (_, _) => Dispatcher.BeginInvoke(() => { if (RoomPanel.Visibility == Visibility.Visible) LeaveRoom(); });
+        _ws.OnError += (_, evt) => Dispatcher.BeginInvoke(() => MessageBox.Show("连接失败: " + evt.Message, "错误", MessageBoxButton.OK, MessageBoxImage.Error));
+        _ws.OnClose += (_, _) => Dispatcher.BeginInvoke(() => LeaveRoom());
         _ws.Connect();
 
         if (_ws.ReadyState != WebSocketState.Open)
@@ -249,10 +220,10 @@ public partial class MainWindow : Window
         var sendPort = sendCreated.GetProperty("port").GetInt32();
         _serverSendEndPoint = new IPEndPoint(IPAddress.Parse(sendIp), sendPort);
 
-        // 6. 创建接收 PlainTransport
+        // 6. 创建接收 PlainTransport（只创建一次，后续复用）
         SendMessage(new { type = "createPlainTransport", direction = "recv" });
         var recvCreated = await WaitForMessage("plainTransportCreated");
-        var recvTransportId = recvCreated.GetProperty("id").GetString()!;
+        _recvTransportId = recvCreated.GetProperty("id").GetString()!;
         var recvIp = recvCreated.GetProperty("ip").GetString()!;
         var recvPort = recvCreated.GetProperty("port").GetInt32();
 
@@ -261,12 +232,12 @@ public partial class MainWindow : Window
         byte[] dummyRtp = new byte[12];
         dummyRtp[0] = 0x80;
         dummyRtp[1] = 0x6F;
-        _sendUdp.Send(dummyRtp, dummyRtp.Length, recvEndPoint);
+        _udpClient.Send(dummyRtp, dummyRtp.Length, recvEndPoint);
 
         // 8. 启动接收
         StartRtpReceiver();
 
-        // 9. 切换 UI
+        // 9. 初始化 UI
         LoadAudioDevices();
         RoomNameText.Text = _roomId;
         ControlUserName.Text = _peerId;
@@ -274,10 +245,22 @@ public partial class MainWindow : Window
         MembersPanel.Children.Clear();
         MembersPanel.Children.Add(CreateMemberCard(_peerId, false, true));
 
-        LoginPanel.Visibility = Visibility.Collapsed;
-        RoomPanel.Visibility = Visibility.Visible;
+        // 10. 添加已有成员（包括未开麦的）
+        if (joined.TryGetProperty("existingPeers", out var existingPeers))
+        {
+            foreach (var ep in existingPeers.EnumerateArray())
+            {
+                var epId = ep.GetString()!;
+                if (!_peers.ContainsKey(epId))
+                {
+                    _peers[epId] = new PeerInfo(epId, false);
+                    MembersPanel.Children.Add(CreateMemberCard(epId, false, false));
+                }
+            }
+            UpdateOnlineCount();
+        }
 
-        // 10. 消费已有 producers
+        // 11. 消费已有 producers
         if (joined.TryGetProperty("existingProducers", out var producers))
         {
             foreach (var p in producers.EnumerateArray())
@@ -287,17 +270,13 @@ public partial class MainWindow : Window
                     p.GetProperty("peerId").GetString()!);
             }
         }
-
-        JoinBtn.IsEnabled = true;
-        JoinBtn.Content = "进入语音房间";
     }
 
     private void LeaveRoom()
     {
         DisableMic();
         _recvCts?.Cancel();
-        _sendUdp?.Dispose(); _sendUdp = null;
-        _recvUdp?.Dispose(); _recvUdp = null;
+        _udpClient?.Dispose(); _udpClient = null;
         _audioOutput?.Stop(); _audioOutput?.Dispose(); _audioOutput = null;
         _playbackBuffer = null;
         _opusEncoder?.Dispose(); _opusEncoder = null;
@@ -305,11 +284,10 @@ public partial class MainWindow : Window
 
         SendMessage(new { type = "leaveRoom" });
         _ws?.Close(); _ws = null;
-        _sendTransportId = null; _serverSendEndPoint = null;
+        _sendTransportId = null; _recvTransportId = null; _serverSendEndPoint = null;
         _peers.Clear(); MembersPanel.Children.Clear(); _pendingMessages.Clear();
 
-        RoomPanel.Visibility = Visibility.Collapsed;
-        LoginPanel.Visibility = Visibility.Visible;
+        Dispatcher.BeginInvoke(() => Close());
     }
 
     // ==================== WebSocket ====================
@@ -363,7 +341,7 @@ public partial class MainWindow : Window
                 Dispatcher.BeginInvoke(() => { RemoveMemberCard(pl); UpdateOnlineCount(); });
                 break;
             case "error":
-                Dispatcher.BeginInvoke(() => ShowError(msg.GetProperty("message").GetString() ?? "未知错误"));
+                Dispatcher.BeginInvoke(() => MessageBox.Show(msg.GetProperty("message").GetString() ?? "未知错误", "服务器错误", MessageBoxButton.OK, MessageBoxImage.Warning));
                 break;
         }
     }
@@ -372,18 +350,7 @@ public partial class MainWindow : Window
 
     private async Task ConsumeRemoteAsync(string producerId, string peerId)
     {
-        // 创建接收 PlainTransport
-        SendMessage(new { type = "createPlainTransport", direction = "recv" });
-        var recvMsg = await WaitForMessage("plainTransportCreated");
-        var consumerRecvIp = recvMsg.GetProperty("ip").GetString()!;
-        var consumerRecvPort = recvMsg.GetProperty("port").GetInt32();
-
-        // 发送空 RTP 触发 comedia
-        var ep = new IPEndPoint(IPAddress.Parse(consumerRecvIp), consumerRecvPort);
-        byte[] dummy = new byte[12]; dummy[0] = 0x80; dummy[1] = 0x6F;
-        _sendUdp?.Send(dummy, dummy.Length, ep);
-
-        // 请求消费
+        // 复用 JoinRoom 时创建的 recv PlainTransport，直接请求消费
         SendMessage(new { type = "consume", producerId, rtpCapabilities = GetRtpCapabilities() });
         var msg = await WaitForMessage("consumed");
         var consumerId = msg.GetProperty("consumerId").GetString()!;
@@ -425,7 +392,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    var result = await _recvUdp!.ReceiveAsync();
+                    var result = await _udpClient!.ReceiveAsync();
                     ProcessIncomingRtp(result.Buffer);
                 }
                 catch (ObjectDisposedException) { break; }
@@ -471,7 +438,7 @@ public partial class MainWindow : Window
 
     private void SendRtpAudio(byte[] pcmData)
     {
-        if (_sendUdp == null || _serverSendEndPoint == null || _opusEncoder == null) return;
+        if (_udpClient == null || _serverSendEndPoint == null || _opusEncoder == null) return;
         try
         {
             int count = pcmData.Length / 2; // mono sample count
@@ -499,7 +466,7 @@ public partial class MainWindow : Window
                 rtp[10] = (byte)((_sendSsrc >> 8) & 0xFF); rtp[11] = (byte)(_sendSsrc & 0xFF);
                 Array.Copy(opus, 0, rtp, 12, enc);
 
-                _sendUdp.Send(rtp, rtp.Length, _serverSendEndPoint);
+                _udpClient.Send(rtp, rtp.Length, _serverSendEndPoint);
                 _sendSeq++;
                 _sendTimestamp += (uint)FrameSize;
             }
@@ -535,7 +502,7 @@ public partial class MainWindow : Window
                 {
                     if (!t.IsCompletedSuccessfully)
                     {
-                        ShowError("produce 失败: " + t.Exception?.InnerException?.Message);
+                        MessageBox.Show("produce 失败: " + t.Exception?.InnerException?.Message, "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                         DisableMic();
                     }
                 });
@@ -543,7 +510,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ShowError($"麦克风开启失败: {ex.Message}");
+            MessageBox.Show($"麦克风开启失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -591,11 +558,21 @@ public partial class MainWindow : Window
         {
             SpeakingRing.Opacity = 1;
             ((Storyboard)FindResource("SpeakingStoryboard")).Begin();
+            if (SpeakingOuterRing != null)
+            {
+                SpeakingOuterRing.Opacity = 1;
+                ((Storyboard)FindResource("SpeakingOuterRingStoryboard")).Begin();
+            }
         }
         else
         {
             SpeakingRing.Opacity = 0;
             ((Storyboard)FindResource("SpeakingStoryboard")).Stop();
+            if (SpeakingOuterRing != null)
+            {
+                SpeakingOuterRing.Opacity = 0;
+                ((Storyboard)FindResource("SpeakingOuterRingStoryboard")).Stop();
+            }
         }
     }
 
@@ -621,21 +598,22 @@ public partial class MainWindow : Window
     private Border CreateMemberCard(string peerId, bool micEnabled, bool isSelf)
     {
         var initial = peerId.Length > 0 ? peerId[0].ToString().ToUpper() : "?";
-        var border = new Border { Tag = peerId, Width = 120, CornerRadius = new CornerRadius(12), Padding = new Thickness(8, 16, 8, 8), Cursor = System.Windows.Input.Cursors.Hand, Background = Brushes.Transparent };
+        var border = new Border { Tag = peerId, Width = 140, CornerRadius = new CornerRadius(16), Padding = new Thickness(12, 20, 12, 12), Cursor = System.Windows.Input.Cursors.Hand, Background = Brushes.Transparent, BorderBrush = new SolidColorBrush(Color.FromArgb(30, 148, 163, 184)), BorderThickness = new Thickness(1) };
         var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-        var avatarGrid = new Grid { Width = 52, Height = 52, Margin = new Thickness(0, 0, 0, 8) };
+        var avatarGrid = new Grid { Width = 72, Height = 72, Margin = new Thickness(0, 0, 0, 10) };
 
-        avatarGrid.Children.Add(new Ellipse { Name = "MemberAvatar", Width = 48, Height = 48, Fill = isSelf ? (Brush)FindResource("AvatarSelfBrush") : micEnabled ? (Brush)FindResource("AvatarOtherBrush") : (Brush)FindResource("AvatarMutedBrush") });
-        avatarGrid.Children.Add(new Ellipse { Name = "SpeakingRing", Width = 52, Height = 52, Stroke = (Brush)FindResource("SuccessBrush"), StrokeThickness = 2.5, Opacity = 0 });
-        avatarGrid.Children.Add(new TextBlock { Text = initial, FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+        avatarGrid.Children.Add(new Ellipse { Name = "MemberAvatar", Width = 64, Height = 64, Fill = isSelf ? (Brush)FindResource("AvatarSelfBrush") : micEnabled ? (Brush)FindResource("AvatarOtherBrush") : (Brush)FindResource("AvatarMutedBrush") });
+        avatarGrid.Children.Add(new Ellipse { Name = "SpeakingRing", Width = 70, Height = 70, Stroke = (Brush)FindResource("SuccessBrush"), StrokeThickness = 2.5, Opacity = 0, RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = new ScaleTransform(1, 1) });
+        avatarGrid.Children.Add(new Ellipse { Name = "SpeakingOuterRing", Width = 76, Height = 76, Stroke = (Brush)FindResource("SuccessBrush"), StrokeThickness = 1.5, Opacity = 0, RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = new ScaleTransform(1, 1) });
+        avatarGrid.Children.Add(new TextBlock { Text = initial, FontSize = 26, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
 
         stack.Children.Add(avatarGrid);
-        stack.Children.Add(new TextBlock { Text = peerId, FontSize = 13, FontWeight = FontWeights.Medium, Foreground = (Brush)FindResource("TextBrush"), HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 100 });
-        stack.Children.Add(new Ellipse { Name = "StatusDot", Width = 12, Height = 12, Fill = micEnabled ? (Brush)FindResource("SuccessBrush") : (Brush)FindResource("DangerBrush"), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 4, 0, 0) });
+        stack.Children.Add(new TextBlock { Text = peerId, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = (Brush)FindResource("TextBrush"), HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 120 });
+        stack.Children.Add(new Ellipse { Name = "StatusDot", Width = 14, Height = 14, Fill = micEnabled ? (Brush)FindResource("SuccessBrush") : (Brush)FindResource("DangerBrush"), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) });
         border.Child = stack;
 
-        border.MouseEnter += (_, _) => border.Background = (Brush)FindResource("BgHoverBrush");
-        border.MouseLeave += (_, _) => border.Background = Brushes.Transparent;
+        border.MouseEnter += (_, _) => { border.Background = (Brush)FindResource("BgHoverBrush"); border.BorderBrush = new SolidColorBrush(Color.FromArgb(60, 148, 163, 184)); };
+        border.MouseLeave += (_, _) => { border.Background = Brushes.Transparent; border.BorderBrush = new SolidColorBrush(Color.FromArgb(30, 148, 163, 184)); };
         return border;
     }
 
@@ -669,7 +647,4 @@ public partial class MainWindow : Window
             bg.Fill = enabled ? (Brush)FindResource("SuccessBrush") : (Brush)FindResource("BgInputBrush");
         MicBtn.ToolTip = enabled ? "关闭麦克风" : "开启麦克风";
     }
-
-    private void ShowError(string msg) { ErrorText.Text = msg; ErrorBorder.Visibility = Visibility.Visible; }
-    private void HideError() => ErrorBorder.Visibility = Visibility.Collapsed;
 }

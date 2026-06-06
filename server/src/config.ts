@@ -5,7 +5,7 @@ const announcedIp = process.env.ANNOUNCED_IP || "127.0.0.1";
 
 export const config = {
   // HTTP + WebSocket server port
-  listenPort: parseInt(process.env.LISTEN_PORT || "3000", 10),
+  listenPort: parseInt(process.env.LISTEN_PORT || "1985", 10),
 
   // mediasoup Worker settings
   worker: {

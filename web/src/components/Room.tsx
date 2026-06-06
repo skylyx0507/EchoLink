@@ -1,7 +1,41 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useMediasoup, NOISE_PRESETS, type NoiseLevel } from "../hooks/useMediasoup";
 import { useTheme } from "../hooks/useTheme";
 import { ThemeSwitcher } from "./ThemeSwitcher";
+
+const PROBE_PORTS = [1985, 3000, 8080, 8000, 5000, 4000];
+
+function probePort(host: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let attempts = 0;
+
+    for (const port of PROBE_PORTS) {
+      const ws = new WebSocket(`ws://${host}:${port}/ws`);
+      const timer = setTimeout(() => {
+        ws.close();
+        if (!settled && ++attempts === PROBE_PORTS.length) {
+          reject(new Error(`无法连接到 ${host}，请指定端口`));
+        }
+      }, 2000);
+
+      ws.onopen = () => {
+        if (settled) { ws.close(); return; }
+        settled = true;
+        clearTimeout(timer);
+        ws.close();
+        resolve(`ws://${host}:${port}/ws`);
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timer);
+        if (!settled && ++attempts === PROBE_PORTS.length) {
+          reject(new Error(`无法连接到 ${host}，请指定端口`));
+        }
+      };
+    }
+  });
+}
 
 export function Room() {
   const {
@@ -14,19 +48,33 @@ export function Room() {
     enableMic,
     disableMic,
     setNoiseLevel,
+    micDevices,
+    speakerDevices,
+    selectedMic,
+    selectedSpeaker,
+    setSelectedMic,
+    setSelectedSpeaker,
+    enumerateAudioDevices,
   } = useMediasoup();
   const { currentTheme, setTheme, themes } = useTheme();
 
-  const [roomId, setRoomId] = useState("test-room");
+  const [serverAddr, setServerAddr] = useState(
+    () => localStorage.getItem("echolink-server") || window.location.hostname
+  );
+  const [roomId, setRoomId] = useState(
+    () => localStorage.getItem("echolink-room") || "test-room"
+  );
   const [peerId, setPeerId] = useState(
-    () => `用户${Math.random().toString(36).slice(2, 6)}`
+    () => localStorage.getItem("echolink-peer") || `用户${Math.random().toString(36).slice(2, 6)}`
   );
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showDeviceMenu, setShowDeviceMenu] = useState(false);
+  const deviceMenuRef = useRef<HTMLDivElement>(null);
 
   const handleJoin = async () => {
-    if (!roomId.trim() || !peerId.trim()) {
-      setError("房间号和昵称不能为空");
+    if (!serverAddr.trim() || !roomId.trim() || !peerId.trim()) {
+      setError("服务器地址、房间号和昵称不能为空");
       return;
     }
 
@@ -34,7 +82,20 @@ export function Room() {
     setError(null);
 
     try {
-      await joinRoom(roomId.trim(), peerId.trim());
+      const addr = serverAddr.trim();
+      localStorage.setItem("echolink-server", addr);
+      localStorage.setItem("echolink-room", roomId.trim());
+      localStorage.setItem("echolink-peer", peerId.trim());
+
+      let wsUrl: string;
+      if (addr.startsWith("ws://") || addr.startsWith("wss://")) {
+        wsUrl = addr;
+      } else if (addr.includes(":")) {
+        wsUrl = `ws://${addr}/ws`;
+      } else {
+        wsUrl = await probePort(addr);
+      }
+      await joinRoom(wsUrl, roomId.trim(), peerId.trim());
     } catch (err) {
       setError(err instanceof Error ? err.message : "加入房间失败");
     } finally {
@@ -54,10 +115,30 @@ export function Room() {
     }
   };
 
-  // 加入房间界面 - Discord 风格的简洁登录
+  // 点击外部关闭设备菜单
+  useEffect(() => {
+    if (!showDeviceMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (deviceMenuRef.current && !deviceMenuRef.current.contains(e.target as Node)) {
+        setShowDeviceMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showDeviceMenu]);
+
+  // 加入房间界面
   if (!roomState.joined) {
     return (
       <div className="app">
+        <div className="floating-particles">
+          <div className="particle"></div>
+          <div className="particle"></div>
+          <div className="particle"></div>
+          <div className="particle"></div>
+          <div className="particle"></div>
+          <div className="particle"></div>
+        </div>
         <ThemeSwitcher
           currentTheme={currentTheme}
           setTheme={setTheme}
@@ -79,6 +160,17 @@ export function Room() {
             </div>
 
             <div className="login-form">
+              <div className="input-group">
+                <label>服务器地址</label>
+                <input
+                  type="text"
+                  placeholder="IP 或 IP:端口（不填端口自动嗅探）"
+                  value={serverAddr}
+                  onChange={(e) => setServerAddr(e.target.value)}
+                  disabled={joining}
+                />
+              </div>
+
               <div className="input-group">
                 <label>房间号</label>
                 <input
@@ -187,6 +279,7 @@ export function Room() {
                     <div className="bar"></div>
                     <div className="bar"></div>
                     <div className="bar"></div>
+                    <div className="bar"></div>
                   </div>
                 )}
               </div>
@@ -210,6 +303,19 @@ export function Room() {
                 </div>
               </div>
             ))}
+
+            {/* 空房间提示 */}
+            {roomState.peers.size === 0 && (
+              <div className="empty-room" style={{ gridColumn: "1 / -1" }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                <p>等待其他玩家加入...</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -221,7 +327,7 @@ export function Room() {
             </div>
             <div className="user-info">
               <span className="user-name">{roomState.peerId}</span>
-              <span className="user-state">
+              <span className={`user-state ${roomState.micEnabled ? (isSpeaking ? "speaking" : "mic-on") : ""}`}>
                 {roomState.micEnabled ? (isSpeaking ? "说话中..." : "麦克风已开") : "麦克风已关"}
               </span>
             </div>
@@ -250,6 +356,49 @@ export function Room() {
                 </svg>
               )}
             </button>
+            <div className="device-settings" ref={deviceMenuRef}>
+              <button
+                className="control-btn settings"
+                onClick={() => {
+                  if (!showDeviceMenu) enumerateAudioDevices();
+                  setShowDeviceMenu(!showDeviceMenu);
+                }}
+                title="音频设备设置"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+              {showDeviceMenu && (
+                <div className="device-menu">
+                  <div className="device-section">
+                    <label>麦克风</label>
+                    <select
+                      value={selectedMic}
+                      onChange={(e) => setSelectedMic(e.target.value)}
+                    >
+                      {micDevices.length === 0 && <option value="">未检测到设备</option>}
+                      {micDevices.map((d) => (
+                        <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="device-section">
+                    <label>扬声器</label>
+                    <select
+                      value={selectedSpeaker}
+                      onChange={(e) => setSelectedSpeaker(e.target.value)}
+                    >
+                      {speakerDevices.length === 0 && <option value="">未检测到设备</option>}
+                      {speakerDevices.map((d) => (
+                        <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="control-right">

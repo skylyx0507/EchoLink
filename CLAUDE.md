@@ -46,7 +46,7 @@ npm start            # Run compiled JS (production)
 ```bash
 cd web
 npm install
-npm start            # Dev server on localhost:3000
+npm start            # Dev server on localhost:5173
 npm run build        # Production build
 npm test             # Run tests
 ```
