@@ -41,7 +41,7 @@ export function Downloads() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/downloads.json", { cache: "no-cache" });
+      const res = await fetch(`/downloads.json?t=${Date.now()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: DownloadsConfig = await res.json();
       setConfig(data);
