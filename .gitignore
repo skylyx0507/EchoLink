@@ -12,6 +12,7 @@ obj/
 *.cache
 
 # IDE
+.vs/
 .vscode/
 .idea/
 
@@ -25,3 +26,18 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Native build artifacts
+*.obj
+*.dll
+*.lib
+*.exp
+*.exe
+*.pdb
+
+# rnnoise build directories
+windows/VoiceChat/Native/rnnoise/build/
+windows/VoiceChat/Native/rnnoise/build_manual/
+
+# Test artifacts
+test.obj
