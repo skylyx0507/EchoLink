@@ -8,6 +8,11 @@ import { Downloads } from "./Downloads";
 const PROBE_PORTS = [1985, 3000, 8080, 8000, 5000, 4000];
 
 function probePort(host: string): Promise<string> {
+  // HTTPS 页面直接用 wss 连当前域名（nginx 反代）
+  if (window.location.protocol === "https:") {
+    return Promise.resolve(`wss://${window.location.host}/ws`);
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     let attempts = 0;
@@ -109,7 +114,10 @@ export function Room() {
       localStorage.setItem("echolink-peer", peerId.trim());
 
       let wsUrl: string;
-      if (addr.startsWith("ws://") || addr.startsWith("wss://")) {
+      if (window.location.protocol === "https:") {
+        // HTTPS 页面通过 nginx 反代连接
+        wsUrl = `wss://${window.location.host}/ws`;
+      } else if (addr.startsWith("ws://") || addr.startsWith("wss://")) {
         wsUrl = addr;
       } else if (addr.includes(":")) {
         wsUrl = `ws://${addr}/ws`;
