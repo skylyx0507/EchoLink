@@ -100,12 +100,14 @@ public partial class MainWindow : Window
     private bool _micEnabled;
     private bool _isSpeaking;
 
-    // ==================== 降噪（Phase 2: RNNoise AI 降噪 + Phase 1 门限兜底）====================
-    private RnnoiseDenoiser? _rnnoiseDenoiser;   // RNNoise 实例（中/高档位使用）
-    private float _vadThreshold = 0.03f;          // 语音检测阈值
-    private float _noiseGateThreshold = 0.015f;   // Phase 1 噪声门限（低档位使用）
-    private bool _noiseGateEnabled = true;        // 是否启用 Phase 1 噪声门限
-    private bool _rnnoiseEnabled = false;        // 是否启用 RNNoise
+    // ==================== 降噪 ====================
+    private RnnoiseDenoiser? _rnnoiseDenoiser;
+    private WebRtcNoiseSuppressor? _webRtcNoise;
+    private float _vadThreshold = 0.03f;
+    private float _noiseGateThreshold = 0.015f;
+    private bool _noiseGateEnabled = true;
+    private bool _rnnoiseEnabled = false;
+    private bool _webRtcEnabled = false;
 
     // 音频参数
     private const int SampleRate = 48000;
@@ -192,46 +194,58 @@ public partial class MainWindow : Window
     {
         if (sender is RadioButton btn && btn.Tag is string tag)
         {
+            // 重置所有降噪标志
+            _noiseGateEnabled = false;
+            _rnnoiseEnabled = false;
+            _webRtcEnabled = false;
+
             switch (tag)
             {
                 case "off":
                     _vadThreshold = 0.00f;
                     _noiseGateThreshold = 0.00f;
-                    _noiseGateEnabled = false;
-                    _rnnoiseEnabled = false;
                     break;
                 case "low":
                     _vadThreshold = 0.03f;
                     _noiseGateThreshold = 0.015f;
                     _noiseGateEnabled = true;
-                    _rnnoiseEnabled = false;
                     break;
                 case "medium":
                     _vadThreshold = 0.05f;
-                    _noiseGateThreshold = 0.00f;
-                    _noiseGateEnabled = false;
                     _rnnoiseEnabled = true;
                     break;
                 case "high":
                     _vadThreshold = 0.10f;
-                    _noiseGateThreshold = 0.00f;
-                    _noiseGateEnabled = false;
                     _rnnoiseEnabled = true;
+                    break;
+                case "webrtc":
+                    _vadThreshold = 0.05f;
+                    _webRtcEnabled = true;
                     break;
             }
 
-            // 如果正在通话，动态切换降噪实例
+            // 动态切换降噪实例
             if (_micEnabled)
             {
+                // 清理不用的实例
+                if (!_rnnoiseEnabled) { _rnnoiseDenoiser?.Dispose(); _rnnoiseDenoiser = null; }
+                if (!_webRtcEnabled) { _webRtcNoise?.Dispose(); _webRtcNoise = null; }
+
+                // 创建需要的实例
                 if (_rnnoiseEnabled && _rnnoiseDenoiser == null && RnnoiseDenoiser.IsAvailable)
                 {
                     try { _rnnoiseDenoiser = new RnnoiseDenoiser(); }
-                    catch { /* RNNoise DLL 加载失败时静默失败 */ }
+                    catch { _rnnoiseEnabled = false; _noiseGateEnabled = true; }
                 }
-                else if (!_rnnoiseEnabled || (_rnnoiseEnabled && !RnnoiseDenoiser.IsAvailable))
+                if (_webRtcEnabled && _webRtcNoise == null)
                 {
-                    _rnnoiseDenoiser?.Dispose();
-                    _rnnoiseDenoiser = null;
+                    try { _webRtcNoise = new WebRtcNoiseSuppressor(); }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ERROR] WebRTC APM init failed: {ex.Message}");
+                        _webRtcEnabled = false;
+                        _noiseGateEnabled = true;
+                    }
                 }
             }
         }
@@ -621,10 +635,22 @@ public partial class MainWindow : Window
             }
             else if (_rnnoiseEnabled && !RnnoiseDenoiser.IsAvailable)
             {
-                // DLL 不存在，中/高档位自动降级为 Phase 1 门限
                 _rnnoiseEnabled = false;
                 _noiseGateEnabled = true;
                 _noiseGateThreshold = 0.025f;
+            }
+
+            // 初始化 WebRTC APM 降噪
+            if (_webRtcEnabled && _webRtcNoise == null)
+            {
+                try { _webRtcNoise = new WebRtcNoiseSuppressor(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] WebRTC APM init failed: {ex.Message}");
+                    _webRtcEnabled = false;
+                    _noiseGateEnabled = true;
+                    _noiseGateThreshold = 0.025f;
+                }
             }
 
             // 每次开麦生成新 SSRC，避免与旧 producer 冲突
@@ -678,68 +704,37 @@ public partial class MainWindow : Window
         _micEnabled = false;
         _rnnoiseDenoiser?.Dispose();
         _rnnoiseDenoiser = null;
+        _webRtcNoise?.Dispose();
+        _webRtcNoise = null;
         ControlUserState.Text = "麦克风已关";
         UpdateMicButton(false);
         SetSpeaking(false);
     }
 
+    private int _noiseDiagCounter = 0;
+
     private void OnMicDataAvailable(object? sender, WaveInEventArgs e)
     {
         if (!_micEnabled) return;
 
-        // 计算当前帧的音量峰值（用于 VAD）
-        float max = 0;
-        for (int i = 0; i < e.BytesRecorded; i += 2)
-        {
-            float lvl = Math.Abs(BitConverter.ToInt16(e.Buffer, i) / 32768f);
-            if (lvl > max) max = lvl;
-        }
-        Dispatcher.BeginInvoke(() => SetSpeaking(max > _vadThreshold));
-
-        // 复制音频数据，准备处理
+        // 复制音频数据
         byte[] pcm = new byte[e.BytesRecorded];
         Array.Copy(e.Buffer, pcm, e.BytesRecorded);
 
-        // Phase 2 降噪：RNNoise AI 降噪（中/高档位）
-        if (_rnnoiseEnabled && _rnnoiseDenoiser != null)
+        // 计算原始音量峰值（用于 VAD）
+        float rawMax = 0;
+        for (int i = 0; i < e.BytesRecorded; i += 2)
         {
-            try
-            {
-                pcm = _rnnoiseDenoiser.Process(pcm);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERROR] RNNoise.Process failed: {ex.GetType().Name}: {ex.Message}");
-            }
+            float lvl = Math.Abs(BitConverter.ToInt16(e.Buffer, i) / 32768f);
+            if (lvl > rawMax) rawMax = lvl;
         }
-        // Phase 1 兜底：简单噪声门限（低档位，或 RNNoise 未就绪时）
-        else if (_noiseGateEnabled && max < _noiseGateThreshold * 3)
-        {
-            for (int i = 0; i < pcm.Length; i += 2)
-            {
-                short sample = BitConverter.ToInt16(pcm, i);
-                float normalized = Math.Abs(sample / 32768f);
-                if (normalized < _noiseGateThreshold)
-                {
-                    // 静音噪声底噪
-                    pcm[i] = 0;
-                    pcm[i + 1] = 0;
-                }
-                else
-                {
-                    // 渐进衰减：越接近门限衰减越多
-                    float ratio = (normalized - _noiseGateThreshold) / (_noiseGateThreshold * 2);
-                    ratio = Math.Clamp(ratio, 0.1f, 1.0f);
-                    sample = (short)(sample * ratio);
-                    pcm[i] = (byte)(sample & 0xFF);
-                    pcm[i + 1] = (byte)((sample >> 8) & 0xFF);
-                }
-            }
-        }
+        Dispatcher.BeginInvoke(() => SetSpeaking(rawMax > _vadThreshold));
 
-        // 麦克风音量增益
+        // ① 麦克风增益（在降噪之前，让 RNNoise 收到足够大的信号）
+        float gainApplied = 1.0f;
         if (Math.Abs(_micVolume - 1.0f) > 0.01f)
         {
+            gainApplied = _micVolume;
             for (int i = 0; i < pcm.Length; i += 2)
             {
                 short sample = BitConverter.ToInt16(pcm, i);
@@ -750,7 +745,83 @@ public partial class MainWindow : Window
             }
         }
 
+        // ② 降噪
+        float rmsBefore = CalcRms(pcm);
+        bool noiseApplied = false;
+
+        if (_webRtcEnabled && _webRtcNoise != null)
+        {
+            try
+            {
+                pcm = _webRtcNoise.Process(pcm);
+                noiseApplied = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] WebRTC.Process failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        else if (_rnnoiseEnabled && _rnnoiseDenoiser != null)
+        {
+            try
+            {
+                pcm = _rnnoiseDenoiser.Process(pcm);
+                noiseApplied = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] RNNoise.Process failed: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        else if (_noiseGateEnabled && rawMax < _noiseGateThreshold * 3)
+        {
+            noiseApplied = true;
+            for (int i = 0; i < pcm.Length; i += 2)
+            {
+                short sample = BitConverter.ToInt16(pcm, i);
+                float normalized = Math.Abs(sample / 32768f);
+                if (normalized < _noiseGateThreshold)
+                {
+                    pcm[i] = 0;
+                    pcm[i + 1] = 0;
+                }
+                else
+                {
+                    float ratio = (normalized - _noiseGateThreshold) / (_noiseGateThreshold * 2);
+                    ratio = Math.Clamp(ratio, 0.1f, 1.0f);
+                    sample = (short)(sample * ratio);
+                    pcm[i] = (byte)(sample & 0xFF);
+                    pcm[i + 1] = (byte)((sample >> 8) & 0xFF);
+                }
+            }
+        }
+
+        // 诊断日志
+        if (++_noiseDiagCounter >= 50)
+        {
+            _noiseDiagCounter = 0;
+            float rmsAfter = CalcRms(pcm);
+            string mode = _webRtcEnabled ? "WebRTC" : _rnnoiseEnabled ? "RNNoise" : _noiseGateEnabled ? "Gate" : "Off";
+            float speechProb = _rnnoiseDenoiser?.LastSpeechProb ?? -1;
+            float dynGain = _rnnoiseDenoiser?.LastAppliedGain ?? 1f;
+            float reduction = rmsBefore > 0 ? (1f - rmsAfter / rmsBefore) * 100 : 0;
+            Console.WriteLine($"[NOISE] {mode} mic={gainApplied:F1} dyn={dynGain:F2} | {rmsBefore:F5}→{rmsAfter:F5} (-{reduction:F0}%) | prob={speechProb:F2}");
+        }
+
         SendRtpAudio(pcm);
+    }
+
+    private static float CalcRms(byte[] pcm)
+    {
+        if (pcm.Length < 2) return 0;
+        double sum = 0;
+        int count = pcm.Length / 2;
+        for (int i = 0; i < pcm.Length; i += 2)
+        {
+            float s = BitConverter.ToInt16(pcm, i) / 32768f;
+            sum += s * s;
+        }
+        return (float)Math.Sqrt(sum / count);
     }
 
     // ==================== 说话动画 ====================

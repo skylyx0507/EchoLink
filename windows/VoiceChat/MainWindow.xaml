@@ -517,6 +517,8 @@
                                          Click="NoiseLevel_Click" Tag="medium"/>
                             <RadioButton Content="高" GroupName="Noise" Style="{StaticResource NoiseButtonStyle}"
                                          Click="NoiseLevel_Click" Tag="high"/>
+                            <RadioButton Content="AI" GroupName="Noise" Style="{StaticResource NoiseButtonStyle}"
+                                         Click="NoiseLevel_Click" Tag="webrtc"/>
                         </StackPanel>
                     </Border>
                     <TextBlock FontSize="14" Foreground="{DynamicResource TextMutedBrush}">
