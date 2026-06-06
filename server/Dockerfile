@@ -18,7 +18,6 @@ RUN apt-get update && apt-get install -y \
 # 配置 pip 和 npm 使用国内镜像
 ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 RUN npm config set registry https://registry.npmmirror.com
-RUN npm config set registry https://registry.npmmirror.com
 
 # 复制 package 文件
 COPY package*.json ./
@@ -37,9 +36,9 @@ RUN npm prune --production
 
 # 暴露端口
 # 1985: WebSocket 信令
-# 10000-59999: mediasoup WebRTC UDP 端口
+# 10000-10100: mediasoup WebRTC UDP 端口
 EXPOSE 1985
-EXPOSE 10000-59999/udp
+EXPOSE 10000-10100/udp
 
 # 启动服务
 CMD ["node", "dist/index.js"]
