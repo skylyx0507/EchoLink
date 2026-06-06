@@ -14,10 +14,6 @@ interface DownloadsConfig {
   lastUpdated: string;
 }
 
-const PLATFORM_ICONS: Record<string, string> = {
-  windows: "M0 0h11v11H0z M12 0h11v11H12z M0 12h11v11H0z M12 12h11v11H12z",
-};
-
 function getPlatformIcon(platform: string) {
   if (platform === "windows") {
     return (
