@@ -6,16 +6,17 @@ WORKDIR /app
 # 使用国内 Debian 镜像加速构建
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
 
-# 安装 mediasoup 依赖（含 pip3 用于 mediasoup 构建）
+# 安装 mediasoup 依赖
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
+    python3-venv \
     make \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # 配置 pip 和 npm 使用国内镜像
-RUN pip3 config set global.index-url https://mirrors.aliyun.com/pypi/simple/ --global 2>/dev/null || true
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 RUN npm config set registry https://registry.npmmirror.com
 RUN npm config set registry https://registry.npmmirror.com
 
