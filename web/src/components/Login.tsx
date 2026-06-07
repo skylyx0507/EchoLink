@@ -13,7 +13,7 @@ async function probeServer(host: string): Promise<string> {
     try {
       const res = await fetch(`http://${host}:${port}/health`, { signal: AbortSignal.timeout(2000) });
       if (res.ok) return `http://${host}:${port}`;
-    } catch {}
+    } catch { /* port unreachable */ }
   }
   throw new Error(`无法连接到 ${host}，请检查服务器地址`);
 }

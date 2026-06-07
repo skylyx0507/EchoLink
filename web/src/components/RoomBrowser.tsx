@@ -40,7 +40,7 @@ export function RoomBrowser() {
       navigate("/");
       return;
     }
-    fetchRooms();
+    fetchRooms(); // eslint-disable-line react-hooks/set-state-in-effect
     const interval = setInterval(fetchRooms, 5000);
     return () => clearInterval(interval);
   }, [fetchRooms, navigate]);

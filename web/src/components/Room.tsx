@@ -1,55 +1,32 @@
 import { useState, useRef, useEffect } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useMediasoup, NOISE_PRESETS, type NoiseLevel } from "../hooks/useMediasoup";
 import { useTheme } from "../hooks/useTheme";
 import { ThemeSwitcher } from "./ThemeSwitcher";
-import { Downloads } from "./Downloads";
 
 const PROBE_PORTS = [1985, 3000, 8080, 8000, 5000, 4000];
 
-function probePort(host: string): Promise<string> {
+async function probePort(host: string): Promise<string> {
   if (window.location.protocol === "https:") {
-    return Promise.resolve(`wss://${window.location.host}/ws`);
+    return `wss://${window.location.host}/ws`;
   }
-
-  return (async () => {
-    for (const port of PROBE_PORTS) {
-      try {
-        const ok = await new Promise<boolean>((resolve) => {
-          const ws = new WebSocket(`ws://${host}:${port}/ws`);
-          const timer = setTimeout(() => { ws.close(); resolve(false); }, 2000);
-          ws.onopen = () => { clearTimeout(timer); ws.close(); resolve(true); };
-          ws.onerror = () => { clearTimeout(timer); resolve(false); };
-        });
-        if (ok) return `ws://${host}:${port}/ws`;
-      } catch {}
-    }
-    throw new Error(`无法连接到 ${host}，请指定端口`);
-  })();
-}
-
-function getHttpBaseUrl(serverAddr: string): string {
-  if (serverAddr.startsWith("ws://")) return serverAddr.replace("ws://", "http://");
-  if (serverAddr.startsWith("wss://")) return serverAddr.replace("wss://", "https://");
-  if (serverAddr.includes(":")) return `http://${serverAddr}`;
-  return `http://${serverAddr}:1985`;
-}
-
-async function apiCall(baseUrl: string, path: string, body: unknown): Promise<Record<string, unknown>> {
-  const res = await fetch(`${baseUrl}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error((data as Record<string, string>).error || `HTTP ${res.status}`);
-  return data as Record<string, unknown>;
+  for (const port of PROBE_PORTS) {
+    try {
+      const ok = await new Promise<boolean>((resolve) => {
+        const ws = new WebSocket(`ws://${host}:${port}/ws`);
+        const timer = setTimeout(() => { ws.close(); resolve(false); }, 2000);
+        ws.onopen = () => { clearTimeout(timer); ws.close(); resolve(true); };
+        ws.onerror = () => { clearTimeout(timer); resolve(false); };
+      });
+      if (ok) return `ws://${host}:${port}/ws`;
+    } catch { /* port unreachable */ }
+  }
+  throw new Error(`无法连接到 ${host}`);
 }
 
 export function Room() {
   const navigate = useNavigate();
   const { roomId: urlRoomId } = useParams();
-  const [searchParams] = useSearchParams();
 
   const {
     roomState,
@@ -72,98 +49,66 @@ export function Room() {
   } = useMediasoup();
   const { currentTheme, setTheme, themes } = useTheme();
 
-  const [serverAddr, setServerAddr] = useState(
-    () => searchParams.get("server") || localStorage.getItem("echolink-server") || window.location.hostname
-  );
-  const [roomId, setRoomId] = useState(
-    () => urlRoomId || localStorage.getItem("echolink-room") || "test-room"
-  );
-  const [username, setUsername] = useState(
-    () => localStorage.getItem("echolink-username") || ""
-  );
-  const [password, setPassword] = useState("");
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeviceMenu, setShowDeviceMenu] = useState(false);
   const deviceMenuRef = useRef<HTMLDivElement>(null);
+  const autoJoinDone = useRef(false);
+
+  useEffect(() => {
+    if (autoJoinDone.current) return;
+    autoJoinDone.current = true;
+
+    const token = localStorage.getItem("echolink-token");
+    const username = localStorage.getItem("echolink-username");
+    const serverAddr = localStorage.getItem("echolink-server") || window.location.hostname;
+    const roomId = urlRoomId || localStorage.getItem("echolink-room") || "lobby";
+
+    if (!token || !username) {
+      navigate("/");
+      return;
+    }
+
+    const doJoin = async () => {
+      setJoining(true);
+      setError(null);
+      try {
+        let wsUrl: string;
+        if (window.location.protocol === "https:") {
+          wsUrl = `wss://${window.location.host}/ws`;
+        } else if (serverAddr.includes(":")) {
+          wsUrl = `ws://${serverAddr}/ws`;
+        } else {
+          wsUrl = await probePort(serverAddr);
+        }
+        await joinRoom(wsUrl, roomId, username, token);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "加入房间失败");
+      } finally {
+        setJoining(false);
+      }
+    };
+    doJoin();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (roomState.joined && roomState.roomId) {
       const expectedPath = `/room/${roomState.roomId}`;
-      const expectedSearch = `?server=${encodeURIComponent(serverAddr)}`;
-      if (window.location.pathname !== expectedPath || window.location.search !== expectedSearch) {
-        navigate(`${expectedPath}${expectedSearch}`, { replace: true });
+      if (window.location.pathname !== expectedPath) {
+        navigate(expectedPath, { replace: true });
       }
-    } else if (!roomState.joined && urlRoomId) {
-      navigate("/", { replace: true });
     }
-  }, [roomState.joined, roomState.roomId, serverAddr, urlRoomId, navigate]);
-
-  const handleJoin = async () => {
-    if (!serverAddr.trim() || !roomId.trim()) {
-      setError("服务器地址和房间号不能为空");
-      return;
-    }
-    if (!username.trim() || !password) {
-      setError("用户名和密码不能为空");
-      return;
-    }
-
-    setJoining(true);
-    setError(null);
-
-    try {
-      const addr = serverAddr.trim();
-      localStorage.setItem("echolink-server", addr);
-      localStorage.setItem("echolink-room", roomId.trim());
-      localStorage.setItem("echolink-username", username.trim());
-
-      const httpBase = getHttpBaseUrl(addr);
-      let token: string;
-      let displayName: string;
-
-      if (authMode === "register") {
-        await apiCall(httpBase, "/register", { username: username.trim(), password });
-      }
-
-      const loginResult = await apiCall(httpBase, "/login", { username: username.trim(), password });
-      token = loginResult.token as string;
-      displayName = loginResult.username as string;
-
-      if (token) {
-        localStorage.setItem("echolink-token", token);
-      }
-
-      let wsUrl: string;
-      if (window.location.protocol === "https:") {
-        wsUrl = `wss://${window.location.host}/ws`;
-      } else if (addr.startsWith("ws://") || addr.startsWith("wss://")) {
-        wsUrl = addr;
-      } else if (addr.includes(":")) {
-        wsUrl = `ws://${addr}/ws`;
-      } else {
-        wsUrl = await probePort(addr);
-      }
-      await joinRoom(wsUrl, roomId.trim(), displayName, token || undefined);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加入房间失败");
-    } finally {
-      setJoining(false);
-    }
-  };
+  }, [roomState.joined, roomState.roomId, navigate]);
 
   const handleLeave = () => {
     leaveRoom();
-    navigate("/");
+    navigate("/rooms");
   };
 
   const handleToggleMic = () => {
-    if (roomState.micEnabled) {
-      disableMic();
-    } else {
-      enableMic();
-    }
+    if (roomState.micEnabled) disableMic();
+    else enableMic();
   };
 
   useEffect(() => {
@@ -181,21 +126,14 @@ export function Room() {
     return (
       <div className="app">
         <div className="floating-particles">
-          <div className="particle"></div>
-          <div className="particle"></div>
-          <div className="particle"></div>
-          <div className="particle"></div>
-          <div className="particle"></div>
-          <div className="particle"></div>
+          <div className="particle"></div><div className="particle"></div>
+          <div className="particle"></div><div className="particle"></div>
+          <div className="particle"></div><div className="particle"></div>
         </div>
-        <ThemeSwitcher
-          currentTheme={currentTheme}
-          setTheme={setTheme}
-          themes={themes}
-        />
-        <div className="login-container">
-          <div className="login-card">
-            <div className="login-header">
+        <ThemeSwitcher currentTheme={currentTheme} setTheme={setTheme} themes={themes} />
+        <div className="auth-container">
+          <div className="auth-card">
+            <div className="auth-header">
               <div className="logo-mark">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
@@ -205,84 +143,14 @@ export function Room() {
                 </svg>
               </div>
               <h1>EchoLink</h1>
-              <p>游戏语音，低延迟沟通</p>
+              <p>{joining ? "正在加入房间..." : "准备连接"}</p>
             </div>
-
-            <div className="login-form">
-              <div className="input-group">
-                <label>服务器地址</label>
-                <input
-                  type="text"
-                  placeholder="IP 或 IP:端口（不填端口自动嗅探）"
-                  value={serverAddr}
-                  onChange={(e) => setServerAddr(e.target.value)}
-                  disabled={joining}
-                />
+            {error && (
+              <div className="auth-form">
+                <div className="error-msg">{error}</div>
+                <button className="auth-btn" onClick={() => navigate("/rooms")}>返回房间列表</button>
               </div>
-
-              <div className="input-group">
-                <label>房间号</label>
-                <input
-                  type="text"
-                  placeholder="输入房间号加入或创建"
-                  value={roomId}
-                  onChange={(e) => setRoomId(e.target.value)}
-                  disabled={joining}
-                />
-              </div>
-
-              <div className="auth-tabs">
-                <button
-                  className={`auth-tab ${authMode === "login" ? "active" : ""}`}
-                  onClick={() => setAuthMode("login")}
-                  disabled={joining}
-                >
-                  登录
-                </button>
-                <button
-                  className={`auth-tab ${authMode === "register" ? "active" : ""}`}
-                  onClick={() => setAuthMode("register")}
-                  disabled={joining}
-                >
-                  注册
-                </button>
-              </div>
-
-              <div className="input-group">
-                <label>用户名</label>
-                <input
-                  type="text"
-                  placeholder="输入用户名"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  disabled={joining}
-                  onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-                />
-              </div>
-
-              <div className="input-group">
-                <label>密码</label>
-                <input
-                  type="password"
-                  placeholder="输入密码"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={joining}
-                  onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-                />
-              </div>
-
-              {error && <div className="error-msg">{error}</div>}
-
-              <button
-                className="login-btn"
-                onClick={handleJoin}
-                disabled={joining}
-              >
-                {joining ? "加入中..." : authMode === "register" ? "注册并加入" : "进入语音房间"}
-              </button>
-            </div>
-            <Downloads />
+            )}
           </div>
         </div>
       </div>
@@ -291,11 +159,7 @@ export function Room() {
 
   return (
     <div className="app room-active">
-      <ThemeSwitcher
-        currentTheme={currentTheme}
-        setTheme={setTheme}
-        themes={themes}
-      />
+      <ThemeSwitcher currentTheme={currentTheme} setTheme={setTheme} themes={themes} />
 
       <div className="channel-container">
         <div className="channel-header">
@@ -349,10 +213,8 @@ export function Room() {
                 </div>
                 {isSpeaking && (
                   <div className="speaking-indicator">
-                    <div className="bar"></div>
-                    <div className="bar"></div>
-                    <div className="bar"></div>
-                    <div className="bar"></div>
+                    <div className="bar"></div><div className="bar"></div>
+                    <div className="bar"></div><div className="bar"></div>
                     <div className="bar"></div>
                   </div>
                 )}
@@ -445,10 +307,7 @@ export function Room() {
                 <div className="device-menu">
                   <div className="device-section">
                     <label>麦克风</label>
-                    <select
-                      value={selectedMic}
-                      onChange={(e) => setSelectedMic(e.target.value)}
-                    >
+                    <select value={selectedMic} onChange={(e) => setSelectedMic(e.target.value)}>
                       {micDevices.length === 0 && <option value="">未检测到设备</option>}
                       {micDevices.map((d) => (
                         <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
@@ -457,11 +316,7 @@ export function Room() {
                   </div>
                   <div className="device-section">
                     <label>扬声器</label>
-                    <select
-                      value={selectedSpeaker}
-                      onChange={(e) => setSelectedSpeaker(e.target.value)}
-                      disabled={!supportsSetSinkId}
-                    >
+                    <select value={selectedSpeaker} onChange={(e) => setSelectedSpeaker(e.target.value)} disabled={!supportsSetSinkId}>
                       {speakerDevices.length === 0 && <option value="">未检测到设备</option>}
                       {speakerDevices.map((d) => (
                         <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
