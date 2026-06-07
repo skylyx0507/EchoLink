@@ -1,14 +1,17 @@
 import { types } from "mediasoup-client";
 
-// 信令消息类型
+export const PROTOCOL_VERSION = 1;
+
 export interface JoinRoomMessage {
   type: "joinRoom";
+  version: number;
   roomId: string;
   peerId: string;
 }
 
 export interface JoinedRoomMessage {
   type: "joinedRoom";
+  version?: number;
   roomId: string;
   peerId: string;
   rtpCapabilities: types.RtpCapabilities;
@@ -23,6 +26,7 @@ export interface CreateTransportMessage {
 
 export interface TransportCreatedMessage {
   type: "transportCreated";
+  version?: number;
   direction: "send" | "recv";
   id: string;
   iceParameters: types.IceParameters;
@@ -38,6 +42,7 @@ export interface ConnectTransportMessage {
 
 export interface TransportConnectedMessage {
   type: "transportConnected";
+  version?: number;
   transportId: string;
 }
 
@@ -49,11 +54,13 @@ export interface ProduceMessage {
 
 export interface ProducedMessage {
   type: "produced";
+  version?: number;
   producerId: string;
 }
 
 export interface NewProducerMessage {
   type: "newProducer";
+  version?: number;
   producerId: string;
   peerId: string;
   kind: types.MediaKind;
@@ -67,6 +74,7 @@ export interface ConsumeMessage {
 
 export interface ConsumedMessage {
   type: "consumed";
+  version?: number;
   consumerId: string;
   producerId: string;
   kind: types.MediaKind;
@@ -80,27 +88,32 @@ export interface ResumeConsumingMessage {
 
 export interface ConsumerResumedMessage {
   type: "consumerResumed";
+  version?: number;
   consumerId: string;
 }
 
 export interface PeerJoinedMessage {
   type: "peerJoined";
+  version?: number;
   peerId: string;
 }
 
 export interface PeerLeftMessage {
   type: "peerLeft";
+  version?: number;
   peerId: string;
 }
 
 export interface ProducerClosedMessage {
   type: "producerClosed";
+  version?: number;
   producerId: string;
   peerId: string;
 }
 
 export interface ErrorMessage {
   type: "error";
+  version?: number;
   message: string;
 }
 

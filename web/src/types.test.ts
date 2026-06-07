@@ -1,14 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import type { JoinRoomMessage, JoinedRoomMessage, SignalingMessage } from './types';
+import { PROTOCOL_VERSION } from './types';
 
 describe('types / SignalingMessage', () => {
   it('joinRoom message has correct shape', () => {
     const msg: JoinRoomMessage = {
       type: 'joinRoom',
+      version: PROTOCOL_VERSION,
       roomId: 'test-room',
       peerId: 'alice',
     };
     expect(msg.type).toBe('joinRoom');
+    expect(msg.version).toBe(PROTOCOL_VERSION);
     expect(msg.roomId).toBe('test-room');
     expect(msg.peerId).toBe('alice');
   });
@@ -28,7 +31,7 @@ describe('types / SignalingMessage', () => {
 
   it('SignalingMessage union covers all types', () => {
     const messages: SignalingMessage[] = [
-      { type: 'joinRoom', roomId: 'r', peerId: 'p' },
+      { type: 'joinRoom', version: PROTOCOL_VERSION, roomId: 'r', peerId: 'p' },
       { type: 'joinedRoom', roomId: 'r', peerId: 'p', rtpCapabilities: { codecs: [], headerExtensions: [] }, existingPeers: [], existingProducers: [] },
       { type: 'createTransport', direction: 'send' },
       { type: 'transportCreated', direction: 'send', id: 't1', iceParameters: { usernameFragment: 'u', password: 'p' }, iceCandidates: [], dtlsParameters: { fingerprints: [] } },

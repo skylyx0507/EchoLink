@@ -63,6 +63,9 @@ export function Room() {
   const [peerId, setPeerId] = useState(
     () => searchParams.get("peer") || localStorage.getItem("echolink-peer") || `用户${Math.random().toString(36).slice(2, 6)}`
   );
+  const [token, setToken] = useState(
+    () => searchParams.get("token") || localStorage.getItem("echolink-token") || ""
+  );
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeviceMenu, setShowDeviceMenu] = useState(false);
@@ -96,6 +99,11 @@ export function Room() {
       localStorage.setItem("echolink-server", addr);
       localStorage.setItem("echolink-room", roomId.trim());
       localStorage.setItem("echolink-peer", peerId.trim());
+      if (token.trim()) {
+        localStorage.setItem("echolink-token", token.trim());
+      } else {
+        localStorage.removeItem("echolink-token");
+      }
 
       let wsUrl: string;
       if (window.location.protocol === "https:") {
@@ -108,7 +116,7 @@ export function Room() {
       } else {
         wsUrl = await probePort(addr);
       }
-      await joinRoom(wsUrl, roomId.trim(), peerId.trim());
+      await joinRoom(wsUrl, roomId.trim(), peerId.trim(), token.trim() || undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加入房间失败");
     } finally {
@@ -205,6 +213,17 @@ export function Room() {
                   onChange={(e) => setPeerId(e.target.value)}
                   disabled={joining}
                   onKeyDown={(e) => e.key === "Enter" && handleJoin()}
+                />
+              </div>
+
+              <div className="input-group">
+                <label>Token（可选）</label>
+                <input
+                  type="password"
+                  placeholder="服务器认证 Token"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  disabled={joining}
                 />
               </div>
 

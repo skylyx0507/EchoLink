@@ -10,6 +10,7 @@ import type {
   JoinedRoomMessage,
   ProducedMessage,
 } from "../types";
+import { PROTOCOL_VERSION } from "../types";
 
 // 降噪档位配置
 export type NoiseLevel = "off" | "low" | "medium" | "high";
@@ -66,7 +67,7 @@ export function useMediasoup() {
   const latencyIntervalRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef<number>(0);
   const reconnectTimerRef = useRef<number | null>(null);
-  const reconnectParamsRef = useRef<{ serverUrl: string; roomId: string; peerId: string } | null>(null);
+  const reconnectParamsRef = useRef<{ serverUrl: string; roomId: string; peerId: string; token?: string } | null>(null);
 
   // 检测浏览器是否支持 setSinkId
   const supportsSetSinkId = useRef(
@@ -562,10 +563,15 @@ export function useMediasoup() {
 
   // 加入房间
   const joinRoom = useCallback(
-    async (serverUrl: string, roomId: string, peerId: string) => {
+    async (serverUrl: string, roomId: string, peerId: string, token?: string) => {
       reconnectParamsRef.current = { serverUrl, roomId, peerId };
       reconnectAttemptRef.current = 0;
-      const ws = new WebSocket(serverUrl);
+      let wsUrl = serverUrl;
+      if (token) {
+        const sep = wsUrl.includes("?") ? "&" : "?";
+        wsUrl = `${wsUrl}${sep}token=${encodeURIComponent(token)}`;
+      }
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       // 消息路由
@@ -667,7 +673,7 @@ export function useMediasoup() {
       return new Promise<void>((resolve, reject) => {
         ws.onopen = () => {
           console.log("[joinRoom] WebSocket opened, sending joinRoom");
-          send({ type: "joinRoom", roomId, peerId });
+          send({ type: "joinRoom", version: PROTOCOL_VERSION, roomId, peerId });
           console.log("[joinRoom] joinRoom message sent");
         };
 
@@ -686,7 +692,7 @@ export function useMediasoup() {
               const params = reconnectParamsRef.current;
               if (params) {
                 leaveRoom();
-                joinRoom(params.serverUrl, params.roomId, params.peerId);
+                joinRoom(params.serverUrl, params.roomId, params.peerId, params.token);
               }
             }, delay);
           }

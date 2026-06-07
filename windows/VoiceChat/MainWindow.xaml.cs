@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private string _serverUrl = "";
     private string _roomId = "";
     private string _peerId = "";
+    private string _token = "";
 
     // ==================== mediasoup ====================
     private string? _sendTransportId;
@@ -115,12 +116,15 @@ public partial class MainWindow : Window
     private const int OpusChannels = 2; // mediasoup 要求 Opus 2 通道
     private const int FrameSize = 960; // 20ms @ 48kHz
 
-    public MainWindow(string serverUrl, string roomId, string peerId, string theme)
+    private const int ProtocolVersion = 1;
+
+    public MainWindow(string serverUrl, string roomId, string peerId, string theme, string token = "")
     {
         InitializeComponent();
         _serverUrl = serverUrl;
         _roomId = roomId;
         _peerId = peerId;
+        _token = token;
         ApplyTheme(theme);
         Loaded += async (_, _) =>
         {
@@ -315,7 +319,13 @@ public partial class MainWindow : Window
         _udpClient = new UdpClient(0);
 
         // 3. 连接 WebSocket
-        _ws = new WebSocket(_serverUrl);
+        var wsUrl = _serverUrl;
+        if (!string.IsNullOrEmpty(_token))
+        {
+            var sep = wsUrl.Contains('?') ? "&" : "?";
+            wsUrl = $"{wsUrl}{sep}token={Uri.EscapeDataString(_token)}";
+        }
+        _ws = new WebSocket(wsUrl);
         _ws.OnMessage += (_, evt) => Dispatcher.BeginInvoke(() => HandleMessage(evt.Data));
         _ws.OnError += (_, evt) => Dispatcher.BeginInvoke(() => MessageBox.Show("连接失败: " + evt.Message, "错误", MessageBoxButton.OK, MessageBoxImage.Error));
         _ws.OnClose += (_, _) => Dispatcher.BeginInvoke(() => LeaveRoom());
@@ -325,7 +335,7 @@ public partial class MainWindow : Window
             throw new Exception("无法连接到服务器");
 
         // 4. 加入房间
-        SendMessage(new { type = "joinRoom", roomId = _roomId, peerId = _peerId });
+        SendMessage(new { type = "joinRoom", version = ProtocolVersion, roomId = _roomId, peerId = _peerId });
         var joined = await WaitForMessage("joinedRoom");
 
         // 5. 创建发送 PlainTransport

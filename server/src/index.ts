@@ -4,7 +4,8 @@ import { types as mediasoupTypes } from "mediasoup";
 import { config } from "./config";
 import { createWorkerPool, getNextWorker, getWorkerStats, closeAllWorkers } from "./mediasoupWorker";
 import { Room } from "./room";
-import { handleSignaling } from "./signaling";
+import { handleSignaling, AuthenticatedPeer } from "./signaling";
+import { generateToken, verifyToken } from "./auth";
 
 /**
  * Entry point: starts HTTP server + WebSocket server + mediasoup Worker pool.
@@ -39,6 +40,45 @@ async function main(): Promise<void> {
       }));
       return;
     }
+
+    if (req.url === "/token" && req.method === "POST") {
+      if (!config.auth.secret) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      if (config.auth.adminKey) {
+        const authHeader = req.headers.authorization;
+        if (authHeader !== `Bearer ${config.auth.adminKey}`) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Unauthorized" }));
+          return;
+        }
+      }
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        try {
+          const { peerId, roomId, expiresIn } = JSON.parse(body);
+          if (!peerId) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "peerId required" }));
+            return;
+          }
+          const payload: { peerId: string; roomId?: string; exp?: number } = { peerId };
+          if (roomId) payload.roomId = roomId;
+          if (expiresIn) payload.exp = Math.floor(Date.now() / 1000) + expiresIn;
+          const token = generateToken(payload, config.auth.secret);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ token }));
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON" }));
+        }
+      });
+      return;
+    }
+
     res.writeHead(404);
     res.end();
   });
@@ -46,9 +86,29 @@ async function main(): Promise<void> {
   // 3. WebSocket server
   const wss = new WebSocketServer({ server: httpServer });
 
-  wss.on("connection", (ws: WebSocket) => {
+  wss.on("connection", (ws: WebSocket, req) => {
     console.log("New WebSocket connection");
-    handleSignaling(ws, rooms, roomClients, getNextWorker, pendingRooms);
+
+    let authenticatedPeer: AuthenticatedPeer | undefined;
+    if (config.auth.secret) {
+      const url = new URL(req.url || "", `http://${req.headers.host}`);
+      const token = url.searchParams.get("token");
+      if (!token) {
+        console.log("Connection rejected: no token provided");
+        ws.close(4001, "Authentication required");
+        return;
+      }
+      const payload = verifyToken(token, config.auth.secret);
+      if (!payload) {
+        console.log("Connection rejected: invalid token");
+        ws.close(4002, "Invalid or expired token");
+        return;
+      }
+      authenticatedPeer = { peerId: payload.peerId, roomId: payload.roomId };
+      console.log(`Authenticated peer: ${payload.peerId}`);
+    }
+
+    handleSignaling(ws, rooms, roomClients, getNextWorker, pendingRooms, authenticatedPeer);
   });
 
   // 4. Start listening

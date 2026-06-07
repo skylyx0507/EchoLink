@@ -175,6 +175,38 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- 密码框样式 -->
+        <Style x:Key="LoginPasswordStyle" TargetType="PasswordBox">
+            <Setter Property="Background" Value="{StaticResource BgInputBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="14,12"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="CaretBrush" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
+                        <Border x:Name="border" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="12" Padding="{TemplateBinding Padding}">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="false"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsFocused" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource PrimaryBrush}"/>
+                                <Setter TargetName="border" Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect BlurRadius="12" Opacity="0.3" ShadowDepth="0" Color="#6366f1"/>
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Border Background="{StaticResource BgBrush}" UseLayoutRounding="True" SnapsToDevicePixels="True">
@@ -260,8 +292,13 @@
                         <TextBlock Text="昵称" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
                                    Margin="0,0,0,6"/>
                         <TextBox x:Name="PeerInput" Text=""
-                                 Style="{StaticResource LoginInputStyle}" Margin="0,0,0,16"
+                                 Style="{StaticResource LoginInputStyle}" Margin="0,0,0,14"
                                  KeyDown="PeerInput_KeyDown"/>
+
+                        <TextBlock Text="Token（可选）" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
+                                   Margin="0,0,0,6"/>
+                        <PasswordBox x:Name="TokenInput"
+                                     Style="{StaticResource LoginPasswordStyle}" Margin="0,0,0,16"/>
                     </StackPanel>
 
                     <!-- 登录按钮 -->

@@ -53,6 +53,7 @@ public partial class LoginWindow : Window
                 if (root.TryGetProperty("room", out var r)) RoomInput.Text = r.GetString() ?? "";
                 if (root.TryGetProperty("peer", out var p)) PeerInput.Text = p.GetString() ?? "";
                 if (root.TryGetProperty("theme", out var t)) _currentTheme = t.GetString() ?? "light";
+                if (root.TryGetProperty("token", out var tk)) TokenInput.Password = tk.GetString() ?? "";
             }
         }
         catch { }
@@ -74,6 +75,7 @@ public partial class LoginWindow : Window
                 room = RoomInput.Text.Trim(),
                 peer = PeerInput.Text.Trim(),
                 theme = _currentTheme,
+                token = TokenInput.Password,
             }));
         }
         catch { }
@@ -181,7 +183,7 @@ public partial class LoginWindow : Window
         try
         {
             // 打开主窗口
-            var mainWindow = new MainWindow(serverUrl, room, peer, _currentTheme);
+            var mainWindow = new MainWindow(serverUrl, room, peer, _currentTheme, TokenInput.Password);
             mainWindow.Show();
             Close();
         }

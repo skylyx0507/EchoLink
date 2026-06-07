@@ -1,11 +1,17 @@
 import { types as mediasoupTypes } from "mediasoup";
 
-// 从环境变量获取服务器公网 IP
 const announcedIp = process.env.ANNOUNCED_IP || "127.0.0.1";
 
+export const PROTOCOL_VERSION = 1;
+export const MIN_SUPPORTED_VERSION = 1;
+
 export const config = {
-  // HTTP + WebSocket server port
   listenPort: parseInt(process.env.LISTEN_PORT || "1985", 10),
+
+  auth: {
+    secret: process.env.AUTH_SECRET || "",
+    adminKey: process.env.AUTH_ADMIN_KEY || "",
+  },
 
   // mediasoup Worker settings
   worker: {

@@ -1,9 +1,11 @@
 import WebSocket from "ws";
 import { types as mediasoupTypes } from "mediasoup";
 import { Room } from "./room";
+import { PROTOCOL_VERSION, MIN_SUPPORTED_VERSION } from "./config";
 
 interface SignalingMessage {
   type: string;
+  version?: number;
   roomId?: string;
   peerId?: string;
   transportId?: string;
@@ -14,6 +16,11 @@ interface SignalingMessage {
   rtpCapabilities?: mediasoupTypes.RtpCapabilities;
   direction?: string;
   consumerId?: string;
+}
+
+export interface AuthenticatedPeer {
+  peerId: string;
+  roomId?: string;
 }
 
 /**
@@ -51,7 +58,8 @@ export function handleSignaling(
   rooms: Map<string, Room>,
   roomClients: Map<string, Set<WebSocket>>,
   getNextWorker: () => mediasoupTypes.Worker,
-  pendingRooms: Map<string, Promise<Room>>
+  pendingRooms: Map<string, Promise<Room>>,
+  authenticatedPeer?: AuthenticatedPeer
 ): void {
   let currentPeerId: string | null = null;
   let currentRoom: Room | null = null;
@@ -61,11 +69,25 @@ export function handleSignaling(
     try {
       msg = JSON.parse(data.toString());
     } catch {
-      send(ws, { type: "error", message: "Invalid JSON" });
+      send(ws, { type: "error", message: "Invalid JSON", version: PROTOCOL_VERSION });
       return;
     }
 
     try {
+      if (msg.type === "joinRoom") {
+        const clientVersion = msg.version ?? 0;
+        if (clientVersion < MIN_SUPPORTED_VERSION || clientVersion > PROTOCOL_VERSION) {
+          send(ws, {
+            type: "error",
+            message: `Unsupported protocol version ${clientVersion}. Server supports ${MIN_SUPPORTED_VERSION}-${PROTOCOL_VERSION}.`,
+            version: PROTOCOL_VERSION,
+            serverVersion: PROTOCOL_VERSION,
+            minSupportedVersion: MIN_SUPPORTED_VERSION,
+          });
+          return;
+        }
+      }
+
       switch (msg.type) {
         case "joinRoom":
           await handleJoinRoom(msg);
@@ -95,12 +117,12 @@ export function handleSignaling(
           handleCloseProducer(msg);
           break;
         default:
-          send(ws, { type: "error", message: `Unknown type: ${msg.type}` });
+          send(ws, { type: "error", message: `Unknown type: ${msg.type}`, version: PROTOCOL_VERSION });
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Unknown error";
       console.error(`Signaling error [${msg.type}]:`, message);
-      send(ws, { type: "error", message });
+      send(ws, { type: "error", message, version: PROTOCOL_VERSION });
     }
   });
 
@@ -110,8 +132,18 @@ export function handleSignaling(
 
   async function handleJoinRoom(msg: SignalingMessage): Promise<void> {
     console.log(`[handleJoinRoom] Received joinRoom for roomId=${msg.roomId}, peerId=${msg.peerId}`);
-    const { roomId, peerId } = msg;
+    let { roomId, peerId } = msg;
     if (!roomId || !peerId) throw new Error("roomId and peerId required");
+
+    if (authenticatedPeer) {
+      peerId = authenticatedPeer.peerId;
+      if (authenticatedPeer.roomId && authenticatedPeer.roomId !== roomId) {
+        throw new Error("Token restricts access to a different room");
+      }
+      if (authenticatedPeer.roomId) {
+        roomId = authenticatedPeer.roomId;
+      }
+    }
 
     // Leave previous room if any
     if (currentRoom && currentPeerId) {
@@ -165,6 +197,7 @@ export function handleSignaling(
 
     const joinedRoomMsg = {
       type: "joinedRoom",
+      version: PROTOCOL_VERSION,
       roomId,
       peerId,
       rtpCapabilities: room.getRtpCapabilities(),
@@ -176,7 +209,7 @@ export function handleSignaling(
     console.log(`[handleJoinRoom] joinedRoom sent successfully`);
 
     // Notify others
-    broadcast(roomId, peerId, { type: "peerJoined", peerId });
+    broadcast(roomId, peerId, { type: "peerJoined", version: PROTOCOL_VERSION, peerId });
     console.log(`[handleJoinRoom] peerJoined broadcasted`);
   }
 
@@ -207,6 +240,7 @@ export function handleSignaling(
 
     send(ws, {
       type: "transportCreated",
+      version: PROTOCOL_VERSION,
       direction,
       id: transport.id,
       iceParameters: transport.iceParameters,
@@ -241,7 +275,7 @@ export function handleSignaling(
       await transport.connect({ dtlsParameters });
     }
 
-    send(ws, { type: "transportConnected", transportId });
+    send(ws, { type: "transportConnected", version: PROTOCOL_VERSION, transportId });
   }
 
   async function handleProduce(msg: SignalingMessage): Promise<void> {
@@ -268,17 +302,19 @@ export function handleSignaling(
       if (currentRoom && currentPeerId) {
         broadcast(currentRoom.id, currentPeerId, {
           type: "producerClosed",
+          version: PROTOCOL_VERSION,
           producerId: producer.id,
           peerId: currentPeerId,
         });
       }
     });
 
-    send(ws, { type: "produced", producerId: producer.id });
+    send(ws, { type: "produced", version: PROTOCOL_VERSION, producerId: producer.id });
 
     // Notify others about new producer so they can consume
     broadcast(currentRoom.id, currentPeerId, {
       type: "newProducer",
+      version: PROTOCOL_VERSION,
       producerId: producer.id,
       peerId: currentPeerId,
       kind,
@@ -315,11 +351,12 @@ export function handleSignaling(
 
     consumer.on("producerclose", () => {
       peer.consumers.delete(consumer.id);
-      send(ws, { type: "consumerClosed", consumerId: consumer.id });
+      send(ws, { type: "consumerClosed", version: PROTOCOL_VERSION, consumerId: consumer.id });
     });
 
     send(ws, {
       type: "consumed",
+      version: PROTOCOL_VERSION,
       consumerId: consumer.id,
       producerId,
       kind: consumer.kind,
@@ -341,7 +378,7 @@ export function handleSignaling(
 
     await consumer.resume();
 
-    send(ws, { type: "consumerResumed", consumerId });
+    send(ws, { type: "consumerResumed", version: PROTOCOL_VERSION, consumerId });
   }
 
   function handleCloseProducer(msg: SignalingMessage): void {
@@ -365,6 +402,7 @@ export function handleSignaling(
 
     broadcast(currentRoom.id, currentPeerId, {
       type: "producerClosed",
+      version: PROTOCOL_VERSION,
       producerId,
       peerId: currentPeerId,
     });
@@ -387,6 +425,7 @@ export function handleSignaling(
 
     send(ws, {
       type: "plainTransportCreated",
+      version: PROTOCOL_VERSION,
       direction,
       id: transport.id,
       ip: transport.tuple.localIp,
@@ -410,7 +449,7 @@ export function handleSignaling(
       if (clients.size === 0) roomClients.delete(room.id);
     }
 
-    broadcast(room.id, peerId, { type: "peerLeft", peerId });
+    broadcast(room.id, peerId, { type: "peerLeft", version: PROTOCOL_VERSION, peerId });
 
     // Destroy room if empty
     if (room.size === 0) {

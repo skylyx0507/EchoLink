@@ -35,6 +35,7 @@ server/
 ├── src/
 │   ├── index.ts              # 入口：组装 HTTP + WebSocket + mediasoup Worker
 │   ├── config.ts             # 配置：端口、Worker 参数、媒体编解码器、WebRTC 传输参数
+│   ├── auth.ts               # Token 认证：HMAC-SHA256 生成与校验
 │   ├── mediasoupWorker.ts    # mediasoup Worker 创建 + Router 创建
 │   ├── signaling.ts          # WebSocket 信令处理（核心逻辑，~400 行）
 │   ├── room.ts               # Room 类：管理 Router + Peer 集合 + Transport 创建
@@ -151,13 +152,27 @@ interface Peer {
 
 ## 5. 信令协议（WebSocket JSON）
 
+### 5.0 协议版本与认证
+
+**协议版本**：所有信令消息包含 `version` 字段（当前为 `1`）。
+- 客户端在 `joinRoom` 中发送 `version`
+- 服务端在所有响应中包含 `version`
+- 版本不兼容时，服务端返回错误 + `serverVersion` + `minSupportedVersion`
+
+**认证**：通过 WebSocket URL 查询参数传递 Token：`ws://host/ws?token=xxx`
+- 服务端配置 `AUTH_SECRET` 后启用认证（不配置则关闭认证，向后兼容）
+- Token 格式：HMAC-SHA256 签名的 JSON（`header.payload.signature`，base64url 编码）
+- Token 载荷：`{ peerId, roomId?, exp? }`
+- Token 生成接口：`POST /token`（需要 `Authorization: Bearer <AUTH_ADMIN_KEY>`）
+- 认证失败时 WebSocket 以 4001/4002 状态码关闭
+
 ### 5.1 完整交互流程
 
 ```
 Client                                                          Server
   |                                                               |
-  |── joinRoom { roomId, peerId }───────────────────────────────>>|
-  |<<────────────────────────── joinedRoom { rtpCapabilities, ... }─|
+  |── joinRoom { version, roomId, peerId }──────────────────────>>|
+  |<<────────────────────────── joinedRoom { version, rtpCaps, ... }|
   |                                                               |
   |── createTransport { direction: "send" }───────────────────────>>|
   |<<──────────────────────────── transportCreated { id, ice, ... }|
@@ -183,8 +198,8 @@ Client                                                          Server
 
 | 消息类型 | 方向 | 说明 |
 |----------|------|------|
-| `joinRoom` | C→S | 加入房间，需提供 `roomId` + `peerId` |
-| `joinedRoom` | S→C | 返回 Router 的 `rtpCapabilities` + 现有 Peer/Producer 列表 |
+| `joinRoom` | C→S | 加入房间，需提供 `version` + `roomId` + `peerId` |
+| `joinedRoom` | S→C | 返回 `version` + Router 的 `rtpCapabilities` + 现有 Peer/Producer 列表 |
 | `createTransport` | C→S | 创建 send/recv WebRtcTransport |
 | `transportCreated` | S→C | 返回 `id`, `iceParameters`, `iceCandidates`, `dtlsParameters` |
 | `connectTransport` | C→S | 传入 `dtlsParameters` 完成 DTLS 握手 |
@@ -291,7 +306,6 @@ docker-compose up  # 使用 docker-compose.yml 中的配置
 
 - **多 Worker 架构**：按 CPU 核心数创建 Worker 池，Room 分配到不同 Worker
 - **REST API**：在 HTTP 服务器上增加房间管理、统计查询接口
-- **认证层**：WebSocket 连接时增加 Token 校验
 - **监控**：暴露 Prometheus 指标（房间数、Peer 数、Producer/Consumer 数、Worker CPU）
 - **录制**：利用 mediasoup 的 `PlainTransport` + FFmpeg/GStreamer 实现服务端录制
 
