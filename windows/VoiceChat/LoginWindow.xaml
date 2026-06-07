@@ -289,15 +289,51 @@
                         <TextBox x:Name="RoomInput" Text="test-room"
                                  Style="{StaticResource LoginInputStyle}" Margin="0,0,0,14"/>
 
-                        <TextBlock Text="昵称" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
+                        <!-- 登录/注册切换 -->
+                        <Border CornerRadius="12" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Margin="0,0,0,14">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="LoginTab" Content="登录" Grid.Column="0"
+                                        Background="{StaticResource PrimaryBrush}" Foreground="White"
+                                        BorderThickness="0" Padding="0,10" FontSize="13" FontWeight="SemiBold"
+                                        Cursor="Hand" Click="AuthTab_Click" Tag="login">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="tabBorder" Background="{TemplateBinding Background}"
+                                                    CornerRadius="11,0,0,11" Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                                <Button x:Name="RegisterTab" Content="注册" Grid.Column="1"
+                                        Background="{StaticResource BgInputBrush}" Foreground="{StaticResource TextMutedBrush}"
+                                        BorderThickness="0" Padding="0,10" FontSize="13" FontWeight="SemiBold"
+                                        Cursor="Hand" Click="AuthTab_Click" Tag="register">
+                                    <Button.Template>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="tabBorder" Background="{TemplateBinding Background}"
+                                                    CornerRadius="0,11,11,0" Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Button.Template>
+                                </Button>
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Text="用户名" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
                                    Margin="0,0,0,6"/>
-                        <TextBox x:Name="PeerInput" Text=""
+                        <TextBox x:Name="UsernameInput" Text=""
                                  Style="{StaticResource LoginInputStyle}" Margin="0,0,0,14"
                                  KeyDown="PeerInput_KeyDown"/>
 
-                        <TextBlock Text="Token（可选）" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
+                        <TextBlock Text="密码" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
                                    Margin="0,0,0,6"/>
-                        <PasswordBox x:Name="TokenInput"
+                        <PasswordBox x:Name="PasswordInput"
                                      Style="{StaticResource LoginPasswordStyle}" Margin="0,0,0,16"/>
                     </StackPanel>
 

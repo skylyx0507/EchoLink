@@ -302,7 +302,7 @@ export function useMediasoup() {
 
   // 音量检测
   const startSpeakingDetection = useCallback((stream: MediaStream) => {
-    const audioContext = new AudioContext();
+    const audioContext = new AudioContext({ latencyHint: "interactive" });
     const source = audioContext.createMediaStreamSource(stream);
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;
@@ -442,11 +442,12 @@ export function useMediasoup() {
 
     try {
       // 获取音频流 - 使用选中的麦克风设备
-      const audioConstraints: MediaTrackConstraints = {
+      const audioConstraints: MediaTrackConstraints & { latency?: number } = {
         echoCancellation: true,
         noiseSuppression: noiseLevel !== "off",
         autoGainControl: true,
         sampleRate: 48000,
+        latency: 0.01,
       };
       if (selectedMic) {
         audioConstraints.deviceId = { exact: selectedMic };
@@ -461,7 +462,7 @@ export function useMediasoup() {
 
       if (noiseLevel !== "off") {
         // 使用 AudioWorklet 进行二次降噪处理
-        const audioContext = new AudioContext();
+        const audioContext = new AudioContext({ latencyHint: "interactive" });
         audioContextRef.current = audioContext;
 
         await audioContext.audioWorklet.addModule('/enhanced-noise-suppressor.js');

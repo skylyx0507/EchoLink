@@ -36,10 +36,12 @@ server/
 │   ├── index.ts              # 入口：组装 HTTP + WebSocket + mediasoup Worker
 │   ├── config.ts             # 配置：端口、Worker 参数、媒体编解码器、WebRTC 传输参数
 │   ├── auth.ts               # Token 认证：HMAC-SHA256 生成与校验
+│   ├── db.ts                 # 用户数据库：SQLite + PBKDF2 密码哈希
 │   ├── mediasoupWorker.ts    # mediasoup Worker 创建 + Router 创建
 │   ├── signaling.ts          # WebSocket 信令处理（核心逻辑，~400 行）
 │   ├── room.ts               # Room 类：管理 Router + Peer 集合 + Transport 创建
 │   └── peer.ts               # Peer 接口：sendTransport / recvTransport / producers / consumers
+├── data/                     # SQLite 数据库目录（自动创建）
 ├── dist/                     # tsc 编译输出（CommonJS）
 ├── package.json
 ├── tsconfig.json
@@ -159,12 +161,21 @@ interface Peer {
 - 服务端在所有响应中包含 `version`
 - 版本不兼容时，服务端返回错误 + `serverVersion` + `minSupportedVersion`
 
-**认证**：通过 WebSocket URL 查询参数传递 Token：`ws://host/ws?token=xxx`
-- 服务端配置 `AUTH_SECRET` 后启用认证（不配置则关闭认证，向后兼容）
+**用户认证**：服务端配置 `AUTH_SECRET` 后启用用户注册/登录系统。
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/register` | POST | 注册新用户，Body: `{ username, password }` |
+| `/login` | POST | 登录，Body: `{ username, password }`，返回 `{ token, username }` |
+| `/token` | POST | 管理接口生成 Token，Body: `{ userId, username, roomId?, expiresIn? }` |
+
+**Token 传递**：通过 WebSocket URL 查询参数：`ws://host/ws?token=xxx`
 - Token 格式：HMAC-SHA256 签名的 JSON（`header.payload.signature`，base64url 编码）
-- Token 载荷：`{ peerId, roomId?, exp? }`
-- Token 生成接口：`POST /token`（需要 `Authorization: Bearer <AUTH_ADMIN_KEY>`）
+- Token 载荷：`{ userId, username, roomId?, exp? }`
 - 认证失败时 WebSocket 以 4001/4002 状态码关闭
+- 认证用户的 `username` 自动作为 `peerId`（无需客户端传入）
+
+**数据存储**：SQLite 数据库（默认 `server/data/echolink.db`），密码使用 PBKDF2-SHA512 哈希。
 
 ### 5.1 完整交互流程
 

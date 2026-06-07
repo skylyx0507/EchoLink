@@ -1,7 +1,9 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -17,6 +19,7 @@ public partial class LoginWindow : Window
     private static readonly int[] ProbePorts = [1985, 3000, 8080, 8000, 5000, 4000];
 
     private string _currentTheme = "light";
+    private string _authMode = "login";
 
     private static readonly Dictionary<string, (string bg, string bgSecondary, string text, string textMuted, string primary, string primaryHover, string success, string danger, string bgInput, string bgCard, string border)> ThemeColors = new()
     {
@@ -35,9 +38,9 @@ public partial class LoginWindow : Window
         UpdateThemeIndicator();
         Loaded += (_, _) =>
         {
-            if (string.IsNullOrEmpty(PeerInput.Text))
-                PeerInput.Text = $"用户{new Random().Next(1000, 9999)}";
-            PeerInput.Focus();
+            if (string.IsNullOrEmpty(UsernameInput.Text))
+                UsernameInput.Text = $"用户{new Random().Next(1000, 9999)}";
+            UsernameInput.Focus();
         };
     }
 
@@ -51,9 +54,8 @@ public partial class LoginWindow : Window
                 var root = json.RootElement;
                 if (root.TryGetProperty("server", out var s)) ServerInput.Text = s.GetString() ?? "localhost";
                 if (root.TryGetProperty("room", out var r)) RoomInput.Text = r.GetString() ?? "";
-                if (root.TryGetProperty("peer", out var p)) PeerInput.Text = p.GetString() ?? "";
+                if (root.TryGetProperty("username", out var u)) UsernameInput.Text = u.GetString() ?? "";
                 if (root.TryGetProperty("theme", out var t)) _currentTheme = t.GetString() ?? "light";
-                if (root.TryGetProperty("token", out var tk)) TokenInput.Password = tk.GetString() ?? "";
             }
         }
         catch { }
@@ -73,9 +75,8 @@ public partial class LoginWindow : Window
             {
                 server = ServerInput.Text.Trim(),
                 room = RoomInput.Text.Trim(),
-                peer = PeerInput.Text.Trim(),
+                username = UsernameInput.Text.Trim(),
                 theme = _currentTheme,
-                token = TokenInput.Password,
             }));
         }
         catch { }
@@ -91,7 +92,6 @@ public partial class LoginWindow : Window
         Resources["BgSecondaryBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.bgSecondary));
         Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.text));
 
-        // 更新资源
         Resources["TextBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.text));
         Resources["TextMutedBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.textMuted));
         Resources["PrimaryBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.primary));
@@ -132,21 +132,97 @@ public partial class LoginWindow : Window
         }
     }
 
+    private void AuthTab_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button btn && btn.Tag is string mode)
+        {
+            _authMode = mode;
+            if (mode == "login")
+            {
+                LoginTab.Background = (Brush)FindResource("PrimaryBrush");
+                LoginTab.Foreground = new SolidColorBrush(Colors.White);
+                RegisterTab.Background = (Brush)FindResource("BgInputBrush");
+                RegisterTab.Foreground = (Brush)FindResource("TextMutedBrush");
+                JoinBtn.Content = "进入语音房间";
+            }
+            else
+            {
+                RegisterTab.Background = (Brush)FindResource("PrimaryBrush");
+                RegisterTab.Foreground = new SolidColorBrush(Colors.White);
+                LoginTab.Background = (Brush)FindResource("BgInputBrush");
+                LoginTab.Foreground = (Brush)FindResource("TextMutedBrush");
+                JoinBtn.Content = "注册并加入";
+            }
+        }
+    }
+
     private void PeerInput_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == System.Windows.Input.Key.Enter)
             JoinBtn_Click(sender, e);
     }
 
+    private static string GetHttpBaseUrl(string addr)
+    {
+        if (addr.StartsWith("ws://")) return addr.Replace("ws://", "http://");
+        if (addr.StartsWith("wss://")) return addr.Replace("wss://", "https://");
+        if (addr.Contains(':')) return $"http://{addr}";
+        return $"http://{addr}:1985";
+    }
+
+    private async Task<(string token, string username)> AuthenticateAsync(string httpBase, string username, string password)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+
+        if (_authMode == "register")
+        {
+            var regContent = new StringContent(
+                JsonSerializer.Serialize(new { username, password }),
+                Encoding.UTF8, "application/json");
+            var regResp = await client.PostAsync($"{httpBase}/register", regContent);
+            var regBody = await regResp.Content.ReadAsStringAsync();
+            if (!regResp.IsSuccessStatusCode)
+            {
+                var regErr = JsonDocument.Parse(regBody);
+                var errMsg = regErr.RootElement.TryGetProperty("error", out var e) ? e.GetString() : "注册失败";
+                throw new Exception(errMsg);
+            }
+        }
+
+        var loginContent = new StringContent(
+            JsonSerializer.Serialize(new { username, password }),
+            Encoding.UTF8, "application/json");
+        var loginResp = await client.PostAsync($"{httpBase}/login", loginContent);
+        var loginBody = await loginResp.Content.ReadAsStringAsync();
+        if (!loginResp.IsSuccessStatusCode)
+        {
+            var loginErr = JsonDocument.Parse(loginBody);
+            var errMsg = loginErr.RootElement.TryGetProperty("error", out var e) ? e.GetString() : "登录失败";
+            throw new Exception(errMsg);
+        }
+
+        var doc = JsonDocument.Parse(loginBody);
+        var root = doc.RootElement;
+        var token = root.TryGetProperty("token", out var t) ? t.GetString() ?? "" : "";
+        var displayName = root.GetProperty("username").GetString() ?? username;
+        return (token, displayName);
+    }
+
     private async void JoinBtn_Click(object sender, RoutedEventArgs e)
     {
         var addr = ServerInput.Text.Trim();
         var room = RoomInput.Text.Trim();
-        var peer = PeerInput.Text.Trim();
+        var username = UsernameInput.Text.Trim();
+        var password = PasswordInput.Password;
 
-        if (string.IsNullOrEmpty(addr) || string.IsNullOrEmpty(room) || string.IsNullOrEmpty(peer))
+        if (string.IsNullOrEmpty(addr) || string.IsNullOrEmpty(room) || string.IsNullOrEmpty(username))
         {
-            ShowError("服务器地址、房间号和昵称不能为空");
+            ShowError("服务器地址、房间号和用户名不能为空");
+            return;
+        }
+        if (string.IsNullOrEmpty(password))
+        {
+            ShowError("密码不能为空");
             return;
         }
 
@@ -168,7 +244,6 @@ public partial class LoginWindow : Window
             }
         }
 
-        // 如果没有保存过房间号，或房间号为空，默认使用服务器地址
         if (string.IsNullOrEmpty(RoomInput.Text.Trim()))
         {
             RoomInput.Text = addr.Split(':')[0];
@@ -182,8 +257,10 @@ public partial class LoginWindow : Window
 
         try
         {
-            // 打开主窗口
-            var mainWindow = new MainWindow(serverUrl, room, peer, _currentTheme, TokenInput.Password);
+            var httpBase = GetHttpBaseUrl(addr);
+            var (token, displayName) = await AuthenticateAsync(httpBase, username, password);
+
+            var mainWindow = new MainWindow(serverUrl, room, displayName, _currentTheme, token);
             mainWindow.Show();
             Close();
         }
@@ -191,7 +268,7 @@ public partial class LoginWindow : Window
         {
             ShowError(ex.Message);
             JoinBtn.IsEnabled = true;
-            JoinBtn.Content = "进入语音房间";
+            JoinBtn.Content = _authMode == "register" ? "注册并加入" : "进入语音房间";
             LoadingBar.Visibility = Visibility.Collapsed;
         }
     }

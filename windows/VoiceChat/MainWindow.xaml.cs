@@ -313,6 +313,9 @@ public partial class MainWindow : Window
         _opusEncoder = new OpusEncoder(SampleRate, OpusChannels, OpusApplication.OPUS_APPLICATION_VOIP);
         _opusEncoder.Bitrate = 64000;
         _opusEncoder.UseInbandFEC = true;
+        _opusEncoder.SignalType = OpusSignal.OPUS_SIGNAL_VOICE;
+        _opusEncoder.Complexity = 5;
+        _opusEncoder.PacketLossPercent = 10;
         _opusDecoder = new OpusDecoder(SampleRate, OpusChannels);
 
         // 2. 初始化 UDP（收发共用同一个端口）
@@ -523,10 +526,12 @@ public partial class MainWindow : Window
 
     private void StartRtpReceiver()
     {
-        _jitterBuffer = new AdaptiveJitterBuffer(minDepth: 2, maxDepth: 10);
+        _jitterBuffer = new AdaptiveJitterBuffer(minDepth: 1, maxDepth: 10);
         _audioOutput = new WaveOutEvent
         {
-            DeviceNumber = _selectedSpeakerDevice >= 0 ? _selectedSpeakerDevice : 0
+            DeviceNumber = _selectedSpeakerDevice >= 0 ? _selectedSpeakerDevice : 0,
+            DesiredLatency = 60,
+            NumberOfBuffers = 3
         };
         _audioOutput.Init(_jitterBuffer);
         _audioOutput.Play();

@@ -19,7 +19,8 @@ interface SignalingMessage {
 }
 
 export interface AuthenticatedPeer {
-  peerId: string;
+  userId: number;
+  username: string;
   roomId?: string;
 }
 
@@ -133,10 +134,10 @@ export function handleSignaling(
   async function handleJoinRoom(msg: SignalingMessage): Promise<void> {
     console.log(`[handleJoinRoom] Received joinRoom for roomId=${msg.roomId}, peerId=${msg.peerId}`);
     let { roomId, peerId } = msg;
-    if (!roomId || !peerId) throw new Error("roomId and peerId required");
+    if (!roomId) throw new Error("roomId required");
 
     if (authenticatedPeer) {
-      peerId = authenticatedPeer.peerId;
+      peerId = authenticatedPeer.username;
       if (authenticatedPeer.roomId && authenticatedPeer.roomId !== roomId) {
         throw new Error("Token restricts access to a different room");
       }
@@ -144,6 +145,8 @@ export function handleSignaling(
         roomId = authenticatedPeer.roomId;
       }
     }
+
+    if (!peerId) throw new Error("peerId required");
 
     // Leave previous room if any
     if (currentRoom && currentPeerId) {

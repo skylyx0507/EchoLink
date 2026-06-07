@@ -28,6 +28,24 @@ function probePort(host: string): Promise<string> {
   })();
 }
 
+function getHttpBaseUrl(serverAddr: string): string {
+  if (serverAddr.startsWith("ws://")) return serverAddr.replace("ws://", "http://");
+  if (serverAddr.startsWith("wss://")) return serverAddr.replace("wss://", "https://");
+  if (serverAddr.includes(":")) return `http://${serverAddr}`;
+  return `http://${serverAddr}:1985`;
+}
+
+async function apiCall(baseUrl: string, path: string, body: unknown): Promise<Record<string, unknown>> {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as Record<string, string>).error || `HTTP ${res.status}`);
+  return data as Record<string, unknown>;
+}
+
 export function Room() {
   const navigate = useNavigate();
   const { roomId: urlRoomId } = useParams();
@@ -60,34 +78,35 @@ export function Room() {
   const [roomId, setRoomId] = useState(
     () => urlRoomId || localStorage.getItem("echolink-room") || "test-room"
   );
-  const [peerId, setPeerId] = useState(
-    () => searchParams.get("peer") || localStorage.getItem("echolink-peer") || `用户${Math.random().toString(36).slice(2, 6)}`
+  const [username, setUsername] = useState(
+    () => localStorage.getItem("echolink-username") || ""
   );
-  const [token, setToken] = useState(
-    () => searchParams.get("token") || localStorage.getItem("echolink-token") || ""
-  );
+  const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeviceMenu, setShowDeviceMenu] = useState(false);
   const deviceMenuRef = useRef<HTMLDivElement>(null);
 
-  // 同步 roomState.joined 与 URL：加入后更新 URL，离开后回到首页
   useEffect(() => {
     if (roomState.joined && roomState.roomId) {
       const expectedPath = `/room/${roomState.roomId}`;
-      const expectedSearch = `?server=${encodeURIComponent(serverAddr)}&peer=${encodeURIComponent(peerId)}`;
+      const expectedSearch = `?server=${encodeURIComponent(serverAddr)}`;
       if (window.location.pathname !== expectedPath || window.location.search !== expectedSearch) {
         navigate(`${expectedPath}${expectedSearch}`, { replace: true });
       }
     } else if (!roomState.joined && urlRoomId) {
-      // 已离开房间但 URL 仍停留在 /room/:roomId，回到首页
       navigate("/", { replace: true });
     }
-  }, [roomState.joined, roomState.roomId, serverAddr, peerId, urlRoomId, navigate]);
+  }, [roomState.joined, roomState.roomId, serverAddr, urlRoomId, navigate]);
 
   const handleJoin = async () => {
-    if (!serverAddr.trim() || !roomId.trim() || !peerId.trim()) {
-      setError("服务器地址、房间号和昵称不能为空");
+    if (!serverAddr.trim() || !roomId.trim()) {
+      setError("服务器地址和房间号不能为空");
+      return;
+    }
+    if (!username.trim() || !password) {
+      setError("用户名和密码不能为空");
       return;
     }
 
@@ -98,16 +117,26 @@ export function Room() {
       const addr = serverAddr.trim();
       localStorage.setItem("echolink-server", addr);
       localStorage.setItem("echolink-room", roomId.trim());
-      localStorage.setItem("echolink-peer", peerId.trim());
-      if (token.trim()) {
-        localStorage.setItem("echolink-token", token.trim());
-      } else {
-        localStorage.removeItem("echolink-token");
+      localStorage.setItem("echolink-username", username.trim());
+
+      const httpBase = getHttpBaseUrl(addr);
+      let token: string;
+      let displayName: string;
+
+      if (authMode === "register") {
+        await apiCall(httpBase, "/register", { username: username.trim(), password });
+      }
+
+      const loginResult = await apiCall(httpBase, "/login", { username: username.trim(), password });
+      token = loginResult.token as string;
+      displayName = loginResult.username as string;
+
+      if (token) {
+        localStorage.setItem("echolink-token", token);
       }
 
       let wsUrl: string;
       if (window.location.protocol === "https:") {
-        // HTTPS 页面通过 nginx 反代连接
         wsUrl = `wss://${window.location.host}/ws`;
       } else if (addr.startsWith("ws://") || addr.startsWith("wss://")) {
         wsUrl = addr;
@@ -116,7 +145,7 @@ export function Room() {
       } else {
         wsUrl = await probePort(addr);
       }
-      await joinRoom(wsUrl, roomId.trim(), peerId.trim(), token.trim() || undefined);
+      await joinRoom(wsUrl, roomId.trim(), displayName, token || undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加入房间失败");
     } finally {
@@ -137,7 +166,6 @@ export function Room() {
     }
   };
 
-  // 点击外部关闭设备菜单
   useEffect(() => {
     if (!showDeviceMenu) return;
     const handler = (e: MouseEvent) => {
@@ -149,7 +177,6 @@ export function Room() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showDeviceMenu]);
 
-  // 加入房间界面
   if (!roomState.joined) {
     return (
       <div className="app">
@@ -204,26 +231,44 @@ export function Room() {
                 />
               </div>
 
+              <div className="auth-tabs">
+                <button
+                  className={`auth-tab ${authMode === "login" ? "active" : ""}`}
+                  onClick={() => setAuthMode("login")}
+                  disabled={joining}
+                >
+                  登录
+                </button>
+                <button
+                  className={`auth-tab ${authMode === "register" ? "active" : ""}`}
+                  onClick={() => setAuthMode("register")}
+                  disabled={joining}
+                >
+                  注册
+                </button>
+              </div>
+
               <div className="input-group">
-                <label>昵称</label>
+                <label>用户名</label>
                 <input
                   type="text"
-                  placeholder="你的游戏昵称"
-                  value={peerId}
-                  onChange={(e) => setPeerId(e.target.value)}
+                  placeholder="输入用户名"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
                   disabled={joining}
                   onKeyDown={(e) => e.key === "Enter" && handleJoin()}
                 />
               </div>
 
               <div className="input-group">
-                <label>Token（可选）</label>
+                <label>密码</label>
                 <input
                   type="password"
-                  placeholder="服务器认证 Token"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="输入密码"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   disabled={joining}
+                  onKeyDown={(e) => e.key === "Enter" && handleJoin()}
                 />
               </div>
 
@@ -234,7 +279,7 @@ export function Room() {
                 onClick={handleJoin}
                 disabled={joining}
               >
-                {joining ? "加入中..." : "进入语音房间"}
+                {joining ? "加入中..." : authMode === "register" ? "注册并加入" : "进入语音房间"}
               </button>
             </div>
             <Downloads />
@@ -244,7 +289,6 @@ export function Room() {
     );
   }
 
-  // 房间界面 - Discord 风格的语音频道
   return (
     <div className="app room-active">
       <ThemeSwitcher
@@ -253,9 +297,7 @@ export function Room() {
         themes={themes}
       />
 
-      {/* 主内容区 */}
       <div className="channel-container">
-        {/* 频道头部 */}
         <div className="channel-header">
           <div className="channel-info">
             <div className="voice-icon">
@@ -298,10 +340,8 @@ export function Room() {
           </div>
         </div>
 
-        {/* 成员列表 */}
         <div className="members-container">
           <div className="members-grid">
-            {/* 自己 */}
             <div className={`member-card ${isSpeaking ? "speaking" : ""}`}>
               <div className="member-avatar-wrapper">
                 <div className={`member-avatar self ${isSpeaking ? "ring" : ""}`}>
@@ -323,7 +363,6 @@ export function Room() {
               </div>
             </div>
 
-            {/* 其他成员 */}
             {Array.from(roomState.peers.values()).map((peer) => (
               <div key={peer.peerId} className="member-card">
                 <div className="member-avatar-wrapper">
@@ -338,7 +377,6 @@ export function Room() {
               </div>
             ))}
 
-            {/* 空房间提示 */}
             {roomState.peers.size === 0 && (
               <div className="empty-room" style={{ gridColumn: "1 / -1" }}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -353,7 +391,6 @@ export function Room() {
           </div>
         </div>
 
-        {/* 底部控制栏 */}
         <div className="control-bar">
           <div className="control-left">
             <div className={`user-avatar ${isSpeaking ? "speaking" : ""}`}>
