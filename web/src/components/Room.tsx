@@ -8,40 +8,24 @@ import { Downloads } from "./Downloads";
 const PROBE_PORTS = [1985, 3000, 8080, 8000, 5000, 4000];
 
 function probePort(host: string): Promise<string> {
-  // HTTPS 页面直接用 wss 连当前域名（nginx 反代）
   if (window.location.protocol === "https:") {
     return Promise.resolve(`wss://${window.location.host}/ws`);
   }
 
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let attempts = 0;
-
+  return (async () => {
     for (const port of PROBE_PORTS) {
-      const ws = new WebSocket(`ws://${host}:${port}/ws`);
-      const timer = setTimeout(() => {
-        ws.close();
-        if (!settled && ++attempts === PROBE_PORTS.length) {
-          reject(new Error(`无法连接到 ${host}，请指定端口`));
-        }
-      }, 2000);
-
-      ws.onopen = () => {
-        if (settled) { ws.close(); return; }
-        settled = true;
-        clearTimeout(timer);
-        ws.close();
-        resolve(`ws://${host}:${port}/ws`);
-      };
-
-      ws.onerror = () => {
-        clearTimeout(timer);
-        if (!settled && ++attempts === PROBE_PORTS.length) {
-          reject(new Error(`无法连接到 ${host}，请指定端口`));
-        }
-      };
+      try {
+        const ok = await new Promise<boolean>((resolve) => {
+          const ws = new WebSocket(`ws://${host}:${port}/ws`);
+          const timer = setTimeout(() => { ws.close(); resolve(false); }, 2000);
+          ws.onopen = () => { clearTimeout(timer); ws.close(); resolve(true); };
+          ws.onerror = () => { clearTimeout(timer); resolve(false); };
+        });
+        if (ok) return `ws://${host}:${port}/ws`;
+      } catch {}
     }
-  });
+    throw new Error(`无法连接到 ${host}，请指定端口`);
+  })();
 }
 
 export function Room() {

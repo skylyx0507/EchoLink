@@ -19,6 +19,7 @@ import { handleSignaling } from "./signaling";
 // Global state
 const rooms = new Map<string, Room>();
 const roomClients = new Map<string, Set<WebSocket>>();
+const pendingRooms = new Map<string, Promise<Room>>();
 
 async function main(): Promise<void> {
   // 1. Create mediasoup Worker pool
@@ -47,7 +48,7 @@ async function main(): Promise<void> {
 
   wss.on("connection", (ws: WebSocket) => {
     console.log("New WebSocket connection");
-    handleSignaling(ws, rooms, roomClients, getNextWorker);
+    handleSignaling(ws, rooms, roomClients, getNextWorker, pendingRooms);
   });
 
   // 4. Start listening
@@ -58,12 +59,14 @@ async function main(): Promise<void> {
   });
 
   // Graceful shutdown
-  process.on("SIGINT", () => {
+  process.on("SIGINT", async () => {
     console.log("Shutting down...");
     wss.close();
+    for (const room of rooms.values()) room.close();
+    rooms.clear();
     httpServer.close();
     closeAllWorkers();
-    process.exit(0);
+    setTimeout(() => process.exit(0), 3000);
   });
 }
 

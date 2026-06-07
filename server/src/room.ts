@@ -135,4 +135,15 @@ export class Room {
   get size(): number {
     return this.peers.size;
   }
+
+  close(): void {
+    for (const peer of this.peers.values()) {
+      for (const p of peer.producers.values()) p.close();
+      for (const c of peer.consumers.values()) c.close();
+      peer.sendTransport?.close();
+      peer.recvTransport?.close();
+    }
+    this.peers.clear();
+    this.router.close();
+  }
 }

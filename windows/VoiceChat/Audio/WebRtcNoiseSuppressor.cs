@@ -252,6 +252,12 @@ public sealed class WebRtcNoiseSuppressor : IDisposable
 
     public void Dispose()
     {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    private void Dispose(bool disposing)
+    {
         if (_disposed) return;
         _disposed = true;
 
@@ -263,5 +269,10 @@ public sealed class WebRtcNoiseSuppressor : IDisposable
         if (_outputStreamConfig != IntPtr.Zero) webrtc_apm_stream_config_destroy(_outputStreamConfig);
         if (_config != IntPtr.Zero) webrtc_apm_config_destroy(_config);
         if (_apm != IntPtr.Zero) webrtc_apm_destroy(_apm);
+    }
+
+    ~WebRtcNoiseSuppressor()
+    {
+        Dispose(false);
     }
 }

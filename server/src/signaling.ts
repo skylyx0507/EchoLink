@@ -50,7 +50,8 @@ export function handleSignaling(
   ws: WebSocket,
   rooms: Map<string, Room>,
   roomClients: Map<string, Set<WebSocket>>,
-  getNextWorker: () => mediasoupTypes.Worker
+  getNextWorker: () => mediasoupTypes.Worker,
+  pendingRooms: Map<string, Promise<Room>>
 ): void {
   let currentPeerId: string | null = null;
   let currentRoom: Room | null = null;
@@ -118,16 +119,27 @@ export function handleSignaling(
       handleLeaveRoom();
     }
 
-    // Get or create room
+    // Get or create room (with lock to prevent race condition)
     let room = rooms.get(roomId);
-    console.log(`[handleJoinRoom] Room lookup: ${room ? 'found' : 'not found'}`);
     if (!room) {
-      console.log(`[handleJoinRoom] Creating new room: ${roomId}`);
-      room = await Room.create(roomId, getNextWorker());
-      rooms.set(roomId, room);
-      console.log(`[handleJoinRoom] Room created and stored`);
+      const pending = pendingRooms.get(roomId);
+      if (pending) {
+        room = await pending;
+      } else {
+        const createPromise = Room.create(roomId, getNextWorker());
+        pendingRooms.set(roomId, createPromise);
+        try {
+          room = await createPromise;
+          rooms.set(roomId, room);
+        } finally {
+          pendingRooms.delete(roomId);
+        }
+      }
     }
 
+    if (room.hasPeer(peerId)) {
+      room.removePeer(peerId);
+    }
     room.addPeer(peerId);
     currentPeerId = peerId;
     currentRoom = room;
@@ -178,8 +190,18 @@ export function handleSignaling(
     const direction = msg.direction;
 
     if (direction === "send") {
+      if (peer.sendTransport) {
+        for (const p of peer.producers.values()) p.close();
+        peer.producers.clear();
+        peer.sendTransport.close();
+      }
       peer.sendTransport = transport;
     } else {
+      if (peer.recvTransport) {
+        for (const c of peer.consumers.values()) c.close();
+        peer.consumers.clear();
+        peer.recvTransport.close();
+      }
       peer.recvTransport = transport;
     }
 
@@ -393,6 +415,7 @@ export function handleSignaling(
     // Destroy room if empty
     if (room.size === 0) {
       rooms.delete(room.id);
+      room.close();
       console.log(`Room ${room.id} destroyed (empty)`);
     }
 

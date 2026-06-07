@@ -99,6 +99,7 @@ public partial class MainWindow : Window
     // ==================== 状态 ====================
     private bool _micEnabled;
     private bool _isSpeaking;
+    private bool _leaving;
 
     // ==================== 降噪 ====================
     private RnnoiseDenoiser? _rnnoiseDenoiser;
@@ -389,6 +390,9 @@ public partial class MainWindow : Window
 
     private void LeaveRoom()
     {
+        if (_leaving) return;
+        _leaving = true;
+
         DisableMic();
         _recvCts?.Cancel();
         _udpClient?.Dispose(); _udpClient = null;
@@ -528,7 +532,7 @@ public partial class MainWindow : Window
                     ProcessIncomingRtp(result.Buffer);
                 }
                 catch (ObjectDisposedException) { break; }
-                catch { }
+                catch (Exception ex) { Console.WriteLine($"[ERROR] RTP receive failed: {ex.GetType().Name}: {ex.Message}"); }
             }
         });
     }

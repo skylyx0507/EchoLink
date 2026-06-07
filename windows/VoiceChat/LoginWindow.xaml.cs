@@ -14,7 +14,7 @@ public partial class LoginWindow : Window
 {
     private static readonly string SettingsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "EchoLink");
     private static readonly string SettingsFile = Path.Combine(SettingsDir, "settings.json");
-    private static readonly int[] ProbePorts = [1985];
+    private static readonly int[] ProbePorts = [1985, 3000, 8080, 8000, 5000, 4000];
 
     private string _currentTheme = "light";
 

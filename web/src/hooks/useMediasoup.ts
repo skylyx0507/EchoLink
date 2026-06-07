@@ -8,6 +8,7 @@ import type {
   TransportCreatedMessage,
   ConsumedMessage,
   JoinedRoomMessage,
+  ProducedMessage,
 } from "../types";
 
 // 降噪档位配置
@@ -61,8 +62,11 @@ export function useMediasoup() {
   const animFrameRef = useRef<number | null>(null);
   const noiseSuppressorRef = useRef<AudioWorkletNode | null>(null);
   const rawStreamRef = useRef<MediaStream | null>(null);
-  const messageHandlersRef = useRef<Map<string, (msg: SignalingMessage) => void>>(new Map());
+  const messageHandlersRef = useRef<Map<string, Array<{ resolve: (msg: SignalingMessage) => void; filter?: (msg: SignalingMessage) => boolean }>>>(new Map());
   const latencyIntervalRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef<number>(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectParamsRef = useRef<{ serverUrl: string; roomId: string; peerId: string } | null>(null);
 
   // 检测浏览器是否支持 setSinkId
   const supportsSetSinkId = useRef(
@@ -78,6 +82,19 @@ export function useMediasoup() {
     if (selectedSpeaker) localStorage.setItem("echolink-speaker", selectedSpeaker);
   }, [selectedSpeaker]);
 
+  // 降噪档位变化时，如果麦克风已开启，重新初始化降噪
+  const noiseLevelInitRef = useRef(true);
+  useEffect(() => {
+    if (noiseLevelInitRef.current) {
+      noiseLevelInitRef.current = false;
+      return;
+    }
+    if (roomState.micEnabled) {
+      disableMic();
+      enableMic();
+    }
+  }, [noiseLevel]);
+
   // 发送信令消息
   const send = useCallback((msg: SignalingMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -86,25 +103,30 @@ export function useMediasoup() {
   }, []);
 
   // 等待特定类型的消息（带超时）
-  const waitForMessage = useCallback((type: string, timeoutMs = 15000): Promise<SignalingMessage> => {
+  const waitForMessage = useCallback((type: string, timeoutMs = 15000, filter?: (msg: SignalingMessage) => boolean): Promise<SignalingMessage> => {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        messageHandlersRef.current.delete(type);
+        const handlers = messageHandlersRef.current.get(type);
+        if (handlers) {
+          const idx = handlers.findIndex(h => h.resolve === resolve);
+          if (idx >= 0) handlers.splice(idx, 1);
+          if (handlers.length === 0) messageHandlersRef.current.delete(type);
+        }
         reject(new Error(`等待 ${type} 超时`));
       }, timeoutMs);
 
-      const handler = (msg: SignalingMessage) => {
-        if (msg.type === "error") {
-          // 忽略不相关的错误消息，让超时处理
-          console.warn(`waitForMessage(${type}): ignoring error: ${msg.message}`);
-          return;
-        }
-        clearTimeout(timer);
-        messageHandlersRef.current.delete(type);
-        resolve(msg);
+      const handler = {
+        resolve: (msg: SignalingMessage) => {
+          clearTimeout(timer);
+          resolve(msg);
+        },
+        filter,
       };
 
-      messageHandlersRef.current.set(type, handler);
+      if (!messageHandlersRef.current.has(type)) {
+        messageHandlersRef.current.set(type, []);
+      }
+      messageHandlersRef.current.get(type)!.push(handler);
     });
   }, []);
 
@@ -130,16 +152,9 @@ export function useMediasoup() {
         dtlsParameters,
       });
 
-      const handleConnect = (m: SignalingMessage) => {
-        if (m.type === "transportConnected" && m.transportId === transport.id) {
-          messageHandlersRef.current.delete("transportConnected");
-          callback();
-        } else if (m.type === "error" && (m as any).transportId === transport.id) {
-          messageHandlersRef.current.delete("transportConnected");
-          errback(new Error(m.message));
-        }
-      };
-      messageHandlersRef.current.set("transportConnected", handleConnect);
+      waitForMessage("transportConnected", 15000, (m) => m.type === "transportConnected" && (m as any).transportId === transport.id)
+        .then(() => callback())
+        .catch((e) => errback(e));
     });
 
     transport.on(
@@ -147,16 +162,9 @@ export function useMediasoup() {
       ({ kind, rtpParameters }, callback, errback) => {
         send({ type: "produce", kind, rtpParameters });
 
-        const handleProduced = (m: SignalingMessage) => {
-          if (m.type === "produced") {
-            messageHandlersRef.current.delete("produced");
-            callback({ id: m.producerId });
-          } else if (m.type === "error") {
-            messageHandlersRef.current.delete("produced");
-            errback(new Error(m.message));
-          }
-        };
-        messageHandlersRef.current.set("produced", handleProduced);
+        waitForMessage("produced", 15000)
+          .then((m) => callback({ id: (m as ProducedMessage).producerId }))
+          .catch((e) => errback(e));
       }
     );
 
@@ -189,16 +197,9 @@ export function useMediasoup() {
         dtlsParameters,
       });
 
-      const handleConnect = (m: SignalingMessage) => {
-        if (m.type === "transportConnected" && m.transportId === transport.id) {
-          messageHandlersRef.current.delete("transportConnected");
-          callback();
-        } else if (m.type === "error" && (m as any).transportId === transport.id) {
-          messageHandlersRef.current.delete("transportConnected");
-          errback(new Error(m.message));
-        }
-      };
-      messageHandlersRef.current.set("transportConnected", handleConnect);
+      waitForMessage("transportConnected", 15000, (m) => m.type === "transportConnected" && (m as any).transportId === transport.id)
+        .then(() => callback())
+        .catch((e) => errback(e));
     });
 
     transport.on("connectionstatechange", (state) => {
@@ -348,11 +349,11 @@ export function useMediasoup() {
         try {
           const stats = await producer.getStats();
           stats.forEach((report) => {
-            if (report.type === "transport") {
-              maxRtt = Math.max(maxRtt, report.rtt || 0);
+            if (report.type === "candidate-pair") {
+              maxRtt = Math.max(maxRtt, (report as any).currentRoundTripTime || 0);
             }
             if (report.type === "remote-inbound-rtp") {
-              maxRtt = Math.max(maxRtt, report.roundTripTime || 0);
+              maxRtt = Math.max(maxRtt, (report as any).roundTripTime || 0);
             }
           });
           hasStats = true;
@@ -562,6 +563,8 @@ export function useMediasoup() {
   // 加入房间
   const joinRoom = useCallback(
     async (serverUrl: string, roomId: string, peerId: string) => {
+      reconnectParamsRef.current = { serverUrl, roomId, peerId };
+      reconnectAttemptRef.current = 0;
       const ws = new WebSocket(serverUrl);
       wsRef.current = ws;
 
@@ -570,18 +573,28 @@ export function useMediasoup() {
         const msg = JSON.parse(event.data) as SignalingMessage;
 
         // 检查是否有等待的处理器
-        const handler = messageHandlersRef.current.get(msg.type);
-        if (handler) {
-          handler(msg);
+        const handlers = messageHandlersRef.current.get(msg.type);
+        if (handlers && handlers.length > 0) {
+          for (const h of [...handlers]) {
+            if (!h.filter || h.filter(msg)) {
+              const idx = handlers.indexOf(h);
+              if (idx >= 0) handlers.splice(idx, 1);
+              h.resolve(msg);
+              break;
+            }
+          }
+          if (handlers.length === 0) messageHandlersRef.current.delete(msg.type);
           return;
         }
 
-        // 错误消息：投递给所有 pending handler（不自动删除）
-        // waitForMessage 的 handler 忽略错误后继续等待正常响应
-        // transportConnected/produced 的 handler 处理错误后自行清理
+        // 错误消息：投递给所有 pending handler
         if (msg.type === "error") {
-          for (const h of messageHandlersRef.current.values()) {
-            h(msg);
+          for (const [, handlerList] of messageHandlersRef.current) {
+            for (const h of [...handlerList]) {
+              if (!h.filter || h.filter(msg)) {
+                h.resolve(msg);
+              }
+            }
           }
           return;
         }
@@ -665,6 +678,18 @@ export function useMediasoup() {
 
         ws.onclose = (event) => {
           console.log(`[joinRoom] WebSocket closed: code=${event.code}, reason=${event.reason}`);
+          if (reconnectParamsRef.current && event.code !== 1000) {
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttemptRef.current), 30000);
+            reconnectAttemptRef.current++;
+            console.log(`[reconnect] Attempt ${reconnectAttemptRef.current} in ${delay}ms`);
+            reconnectTimerRef.current = window.setTimeout(() => {
+              const params = reconnectParamsRef.current;
+              if (params) {
+                leaveRoom();
+                joinRoom(params.serverUrl, params.roomId, params.peerId);
+              }
+            }, delay);
+          }
         };
 
         // 等待 joinedRoom 响应
@@ -759,8 +784,21 @@ export function useMediasoup() {
     wsRef.current?.close();
     wsRef.current = null;
 
+    // 清理 AudioContext
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+
     deviceRef.current = null;
     messageHandlersRef.current.clear();
+
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectParamsRef.current = null;
+    reconnectAttemptRef.current = 0;
 
     setRoomState({
       roomId: "",
