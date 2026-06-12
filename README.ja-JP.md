@@ -48,14 +48,20 @@ EchoLink/
 │   │   ├── room.ts           # ルーム管理
 │   │   ├── peer.ts           # ピア状態
 │   │   ├── config.ts         # サーバー設定
+│   │   ├── db.ts             # SQLite ユーザー永続化
+│   │   ├── auth.ts           # JWT 認証
 │   │   └── mediasoupWorker.ts # Worker / Router 初期化
 │   └── package.json
 ├── web/             # React テストクライアント
 │   ├── src/
 │   │   ├── components/
-│   │   │   └── Room.tsx      # ルームUI
+│   │   │   ├── Room.tsx      # ルームUI
+│   │   │   ├── RoomList.tsx  # ルーム一覧
+│   │   │   ├── Login.tsx     # ログインページ
+│   │   │   └── Register.tsx  # 登録ページ
 │   │   ├── hooks/
-│   │   │   └── useMediasoup.ts # mediasoup ロジックカプセル化
+│   │   │   ├── useMediasoup.ts # mediasoup ロジックカプセル化
+│   │   │   └── useAuth.ts    # 認証状態管理
 │   │   ├── App.tsx
 │   │   └── main.tsx
 │   └── package.json
@@ -63,6 +69,11 @@ EchoLink/
 │   └── VoiceChat/
 │       ├── MainWindow.xaml     # UIレイアウト
 │       ├── MainWindow.xaml.cs  # ビジネスロジック
+│       ├── LoginWindow.xaml    # ログインUI
+│       ├── LoginWindow.xaml.cs # 接続 + 認証ロジック
+│       ├── RoomsWindow.xaml    # ルーム一覧UI
+│       ├── RoomsWindow.xaml.cs # ルーム一覧ロジック
+│       ├── AuthService.cs      # HTTP 認証 / ルーム一覧サービス
 │       └── VoiceChat.csproj
 ├── docker-compose.yml
 └── README.md
@@ -89,7 +100,7 @@ npm run build      # コンパイル
 npm start          # 本番モード
 ```
 
-サーバーはデフォルトで `ws://localhost:3000` をリッスンします。
+サーバーはデフォルトで `ws://localhost:1985` をリッスンします。
 
 ### 2. Webクライアントの起動
 
@@ -132,8 +143,20 @@ JSONベースのWebSocketシグナリングプロトコル、主要なメッセ�
 | `newProducer` | S→C (ブロードキャスト) | 新規ユーザーがマイクON |
 | `producerClosed` | S→C (ブロードキャスト) | ユーザーがマイクOFF |
 | `peerJoined` / `peerLeft` | S→C (ブロードキャスト) | ユーザーの入退室 |
+| `authenticate` | C→S | オプションの JWT 認証 |
+| `authenticated` | S→C | 認証成功 |
+| `listRooms` | C→S | オンラインルーム一覧をリクエスト |
+| `roomsList` | S→C | オンラインルーム一覧の応答 |
 
 **重要な順序**：Transport を作成 → Transport を接続 → 生産/消費。`connectTransport` をスキップすると静かに失敗します。
+
+### REST API
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| POST | `/api/auth/register` | 新規アカウント登録 |
+| POST | `/api/auth/login` | ログインして JWT を取得 |
+| GET | `/api/rooms` | オンラインルーム一覧 |
 
 ---
 
@@ -154,11 +177,13 @@ JSONベースのWebSocketシグナリングプロトコル、主要なメッセ�
 docker-compose up -d
 ```
 
+注：`docker-compose.yml` は SQLite データベースを永続化するために `./data` を server コンテナにマウントします。本番環境では `.env` で強力な `JWT_SECRET` を設定してください。
+
 ---
 
 ## 📝 開発規約
 
-1. mediasoup と SIPSorcery API は公式ドキュメントに厳密に従う必要があります。メソッド名やパラメータを推測しないでください
+1. mediasoup API は公式ドキュメントに厳密に従う必要があります。メソッド名やパラメータを推測しないでください
 2. transport/producer/consumer ロジックを実装する前に、完全な協議フローを説明するコメントを先に書いてください
 3. クライアントコードにキーや認証情報をハードコードしないでください。サーバー設定または環境変数を使用してください
 4. 各モジュールの実装後、ローカル実行/検証コマンドを提供してください

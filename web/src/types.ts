@@ -99,9 +99,36 @@ export interface ProducerClosedMessage {
   peerId: string;
 }
 
+export interface AuthenticateMessage {
+  type: "authenticate";
+  token: string;
+}
+
+export interface AuthenticatedMessage {
+  type: "authenticated";
+  userId: number;
+  username: string;
+  displayName: string | null;
+}
+
+export interface AuthErrorMessage {
+  type: "authError";
+  message: string;
+}
+
+export interface ListRoomsMessage {
+  type: "listRooms";
+}
+
+export interface RoomsListMessage {
+  type: "roomsList";
+  rooms: Array<{ roomId: string; peerCount: number }>;
+}
+
 export interface ErrorMessage {
   type: "error";
   message: string;
+  transportId?: string;
 }
 
 export type SignalingMessage =
@@ -121,6 +148,11 @@ export type SignalingMessage =
   | PeerJoinedMessage
   | PeerLeftMessage
   | ProducerClosedMessage
+  | AuthenticateMessage
+  | AuthenticatedMessage
+  | AuthErrorMessage
+  | ListRoomsMessage
+  | RoomsListMessage
   | ErrorMessage;
 
 // 对等端信息

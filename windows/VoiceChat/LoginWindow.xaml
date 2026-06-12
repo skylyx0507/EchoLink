@@ -252,10 +252,32 @@
                         <TextBox x:Name="ServerInput" Text="localhost"
                                  Style="{StaticResource LoginInputStyle}" Margin="0,0,0,14"/>
 
-                        <TextBlock Text="房间号" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
-                                   Margin="0,0,0,6"/>
-                        <TextBox x:Name="RoomInput" Text="test-room"
-                                 Style="{StaticResource LoginInputStyle}" Margin="0,0,0,14"/>
+                        <!-- 账号区域 -->
+                        <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12"
+                                Padding="14" Margin="0,0,0,14" Background="{StaticResource BgInputBrush}">
+                            <StackPanel>
+                                <TextBlock Text="账号（可选）" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
+                                           Margin="0,0,0,10"/>
+                                <TextBox x:Name="UsernameInput" Tag="用户名"
+                                         Style="{StaticResource LoginInputStyle}" Margin="0,0,0,10"/>
+                                <PasswordBox x:Name="PasswordInput" Password=""
+                                             Background="{StaticResource BgCardBrush}"
+                                             Foreground="{StaticResource TextBrush}"
+                                             BorderBrush="Transparent" BorderThickness="1"
+                                             Padding="14,12" FontSize="15" Margin="0,0,0,10"
+                                             PasswordChanged="PasswordInput_PasswordChanged"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Button x:Name="LoginBtn" Content="登录" Margin="0,0,8,0"
+                                            Style="{StaticResource LoginActionButtonStyle}" Click="LoginBtn_Click"
+                                            Padding="20,10"/>
+                                    <Button x:Name="RegisterBtn" Content="注册" Margin="8,0,0,0"
+                                            Style="{StaticResource LoginActionButtonStyle}" Click="RegisterBtn_Click"
+                                            Padding="20,10"/>
+                                </StackPanel>
+                                <TextBlock x:Name="AuthStatusText" FontSize="12" Foreground="{StaticResource TextMutedBrush}"
+                                           TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
 
                         <TextBlock Text="昵称" FontSize="12" FontWeight="Bold" Foreground="{StaticResource TextSecondaryBrush}"
                                    Margin="0,0,0,6"/>
@@ -265,7 +287,7 @@
                     </StackPanel>
 
                     <!-- 登录按钮 -->
-                    <Button x:Name="JoinBtn" Content="进入语音房间"
+                    <Button x:Name="JoinBtn" Content="进入房间列表"
                             Style="{StaticResource LoginActionButtonStyle}" Click="JoinBtn_Click"/>
                     <ProgressBar x:Name="LoadingBar" IsIndeterminate="True" Height="3"
                                  Visibility="Collapsed" Margin="0,8,0,0"

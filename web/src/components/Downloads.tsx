@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 interface ClientDownload {
   name: string;
@@ -52,17 +52,19 @@ export function Downloads() {
     }
   };
 
-  useEffect(() => {
-    if (expanded && !config && !error) {
+  const handleToggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !config && !error) {
       fetchConfig();
     }
-  }, [expanded]);
+  };
 
   return (
     <div className="downloads-wrapper">
       <button
         className="downloads-toggle"
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleToggle}
         title="客户端下载"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">

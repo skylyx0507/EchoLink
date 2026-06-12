@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Device } from "mediasoup-client";
 import { types } from "mediasoup-client";
+
+// Augment HTMLAudioElement for setSinkId which is not in all DOM type definitions.
+declare global {
+  interface HTMLAudioElement {
+    setSinkId?(sinkId: string): Promise<void>;
+  }
+}
 import type {
   SignalingMessage,
   PeerInfo,
@@ -8,6 +15,7 @@ import type {
   TransportCreatedMessage,
   ConsumedMessage,
   JoinedRoomMessage,
+  AuthenticatedMessage,
 } from "../types";
 
 // 降噪档位配置
@@ -65,10 +73,8 @@ export function useMediasoup() {
   const latencyIntervalRef = useRef<number | null>(null);
 
   // 检测浏览器是否支持 setSinkId
-  const supportsSetSinkId = useRef(
-    typeof HTMLAudioElement !== 'undefined' &&
-    'setSinkId' in HTMLAudioElement.prototype
-  );
+  const supportsSetSinkId = typeof HTMLAudioElement !== 'undefined' &&
+    'setSinkId' in HTMLAudioElement.prototype;
 
   // 持久化设备选择
   useEffect(() => {
@@ -134,7 +140,7 @@ export function useMediasoup() {
         if (m.type === "transportConnected" && m.transportId === transport.id) {
           messageHandlersRef.current.delete("transportConnected");
           callback();
-        } else if (m.type === "error" && (m as any).transportId === transport.id) {
+        } else if (m.type === "error" && m.transportId === transport.id) {
           messageHandlersRef.current.delete("transportConnected");
           errback(new Error(m.message));
         }
@@ -193,7 +199,7 @@ export function useMediasoup() {
         if (m.type === "transportConnected" && m.transportId === transport.id) {
           messageHandlersRef.current.delete("transportConnected");
           callback();
-        } else if (m.type === "error" && (m as any).transportId === transport.id) {
+        } else if (m.type === "error" && m.transportId === transport.id) {
           messageHandlersRef.current.delete("transportConnected");
           errback(new Error(m.message));
         }
@@ -247,8 +253,8 @@ export function useMediasoup() {
         document.body.appendChild(audioElement);
 
         // 应用选中的扬声器设备
-        if (selectedSpeaker && typeof (audioElement as any).setSinkId === "function") {
-          (audioElement as any).setSinkId(selectedSpeaker).catch(() => {});
+        if (selectedSpeaker && typeof audioElement.setSinkId === "function") {
+          audioElement.setSinkId(selectedSpeaker).catch(() => {});
         }
 
         // 显式播放，处理浏览器自动播放策略
@@ -356,7 +362,7 @@ export function useMediasoup() {
             }
           });
           hasStats = true;
-        } catch (err) {
+        } catch {
           // 静默处理单个 producer 的错误
         }
       }
@@ -415,7 +421,7 @@ export function useMediasoup() {
   const applySpeakerToAudioElements = useCallback((deviceId: string) => {
     peersRef.current.forEach((peer) => {
       if (peer.audioElement && typeof peer.audioElement.setSinkId === "function") {
-        (peer.audioElement as any).setSinkId(deviceId).catch(() => {});
+        peer.audioElement.setSinkId(deviceId).catch(() => {});
       }
     });
   }, []);
@@ -561,7 +567,7 @@ export function useMediasoup() {
 
   // 加入房间
   const joinRoom = useCallback(
-    async (serverUrl: string, roomId: string, peerId: string) => {
+    async (serverUrl: string, roomId: string, peerId: string, token?: string | null) => {
       const ws = new WebSocket(serverUrl);
       wsRef.current = ws;
 
@@ -594,7 +600,7 @@ export function useMediasoup() {
 
           case "producerClosed": {
             // 其他用户关闭了麦克风
-            const closedPeerId = (msg as any).peerId as string;
+            const closedPeerId = msg.peerId;
             const closedPeer = peersRef.current.get(closedPeerId);
             if (closedPeer) {
               closedPeer.audioConsumer?.close();
@@ -652,8 +658,24 @@ export function useMediasoup() {
       };
 
       return new Promise<void>((resolve, reject) => {
-        ws.onopen = () => {
-          console.log("[joinRoom] WebSocket opened, sending joinRoom");
+        ws.onopen = async () => {
+          console.log("[joinRoom] WebSocket opened");
+
+          // If a token is provided, authenticate before joining the room.
+          if (token) {
+            try {
+              send({ type: "authenticate", token });
+              const authMsg = (await waitForMessage("authenticated")) as AuthenticatedMessage;
+              console.log("[joinRoom] authenticated as", authMsg.username);
+            } catch (err) {
+              console.error("[joinRoom] authentication failed:", err);
+              reject(new Error("Authentication failed"));
+              ws.close();
+              return;
+            }
+          }
+
+          console.log("[joinRoom] sending joinRoom");
           send({ type: "joinRoom", roomId, peerId });
           console.log("[joinRoom] joinRoom message sent");
         };
@@ -798,6 +820,6 @@ export function useMediasoup() {
       applySpeakerToAudioElements(id);
     },
     enumerateAudioDevices,
-    supportsSetSinkId: supportsSetSinkId.current,
+    supportsSetSinkId,
   };
 }

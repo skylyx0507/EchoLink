@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { BrowserRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { Room } from './Room';
 
 // Mock mediasoup-client to avoid WebRTC errors in jsdom
@@ -25,30 +25,44 @@ Object.defineProperty(globalThis, 'AudioContext', {
   },
 });
 
+// Mock WebSocket so the auto-join effect does not throw.
+class MockWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  readyState = MockWebSocket.CONNECTING;
+  onopen: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+
+  constructor() {
+    setTimeout(() => {
+      this.readyState = MockWebSocket.OPEN;
+      this.onopen?.(new Event('open'));
+    }, 0);
+  }
+
+  send() {}
+  close() {
+    this.readyState = MockWebSocket.CLOSED;
+  }
+}
+
+Object.defineProperty(globalThis, 'WebSocket', { value: MockWebSocket });
+
 describe('Room component', () => {
-  it('renders login form when not joined', () => {
+  it('renders loading state when joining a room', () => {
     render(
-      <BrowserRouter>
-        <Room />
-      </BrowserRouter>
+      <MemoryRouter initialEntries={["/room/test-room"]}>
+        <Routes>
+          <Route path="/room/:roomId" element={<Room />} />
+        </Routes>
+      </MemoryRouter>
     );
 
-    expect(screen.getByText('EchoLink')).toBeInTheDocument();
-    expect(screen.getByText('游戏语音，低延迟沟通')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('IP 或 IP:端口（不填端口自动嗅探）')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('输入房间号加入或创建')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('你的游戏昵称')).toBeInTheDocument();
-    expect(screen.getByText('进入语音房间')).toBeInTheDocument();
-  });
-
-  it('server address input has default value from hostname', () => {
-    render(
-      <BrowserRouter>
-        <Room />
-      </BrowserRouter>
-    );
-
-    const serverInput = screen.getByPlaceholderText('IP 或 IP:端口（不填端口自动嗅探）') as HTMLInputElement;
-    expect(serverInput.value).toBe(window.location.hostname);
+    expect(screen.getByText('正在加入房间...')).toBeInTheDocument();
+    expect(screen.getByText('test-room')).toBeInTheDocument();
   });
 });

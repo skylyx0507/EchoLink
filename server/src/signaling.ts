@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { types as mediasoupTypes } from "mediasoup";
 import { Room } from "./room";
+import { verifyToken, AuthError } from "./auth";
 
 interface SignalingMessage {
   type: string;
@@ -14,6 +15,7 @@ interface SignalingMessage {
   rtpCapabilities?: mediasoupTypes.RtpCapabilities;
   direction?: string;
   consumerId?: string;
+  token?: string;
 }
 
 /**
@@ -54,6 +56,8 @@ export function handleSignaling(
 ): void {
   let currentPeerId: string | null = null;
   let currentRoom: Room | null = null;
+  let currentUserId: number | null = null;
+  let currentDisplayName: string | null = null;
 
   ws.on("message", async (data: WebSocket.RawData) => {
     let msg: SignalingMessage;
@@ -66,6 +70,12 @@ export function handleSignaling(
 
     try {
       switch (msg.type) {
+        case "authenticate":
+          handleAuthenticate(msg);
+          break;
+        case "listRooms":
+          handleListRooms();
+          break;
         case "joinRoom":
           await handleJoinRoom(msg);
           break;
@@ -107,10 +117,45 @@ export function handleSignaling(
     handleLeaveRoom();
   });
 
+  function handleAuthenticate(msg: SignalingMessage): void {
+    const { token } = msg;
+    if (!token) {
+      send(ws, { type: "authError", message: "Token required" });
+      return;
+    }
+
+    try {
+      const payload = verifyToken(token);
+      currentUserId = payload.userId;
+      currentDisplayName = payload.displayName || payload.username;
+      send(ws, {
+        type: "authenticated",
+        userId: payload.userId,
+        username: payload.username,
+        displayName: payload.displayName,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof AuthError ? error.message : "Authentication failed";
+      send(ws, { type: "authError", message });
+    }
+  }
+
+  function handleListRooms(): void {
+    const roomList = Array.from(rooms.entries()).map(([roomId, room]) => ({
+      roomId,
+      peerCount: room.size,
+    }));
+    send(ws, { type: "roomsList", rooms: roomList });
+  }
+
   async function handleJoinRoom(msg: SignalingMessage): Promise<void> {
     console.log(`[handleJoinRoom] Received joinRoom for roomId=${msg.roomId}, peerId=${msg.peerId}`);
-    const { roomId, peerId } = msg;
-    if (!roomId || !peerId) throw new Error("roomId and peerId required");
+    const { roomId } = msg;
+    if (!roomId) throw new Error("roomId required");
+
+    // Use authenticated display name if available, otherwise fall back to peerId from client.
+    const peerId = currentDisplayName || msg.peerId;
+    if (!peerId) throw new Error("peerId required");
 
     // Leave previous room if any
     if (currentRoom && currentPeerId) {

@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMediasoup, NOISE_PRESETS, type NoiseLevel } from "../hooks/useMediasoup";
+import { useAuth } from "../hooks/useAuth";
 import { useTheme } from "../hooks/useTheme";
 import { ThemeSwitcher } from "./ThemeSwitcher";
-import { Downloads } from "./Downloads";
 
 const PROBE_PORTS = [1985, 3000, 8080, 8000, 5000, 4000];
 
@@ -27,7 +27,10 @@ function probePort(host: string): Promise<string> {
       }, 2000);
 
       ws.onopen = () => {
-        if (settled) { ws.close(); return; }
+        if (settled) {
+          ws.close();
+          return;
+        }
         settled = true;
         clearTimeout(timer);
         ws.close();
@@ -48,6 +51,7 @@ export function Room() {
   const navigate = useNavigate();
   const { roomId: urlRoomId } = useParams();
   const [searchParams] = useSearchParams();
+  const { token, user } = useAuth();
 
   const {
     roomState,
@@ -70,67 +74,62 @@ export function Room() {
   } = useMediasoup();
   const { currentTheme, setTheme, themes } = useTheme();
 
-  const [serverAddr, setServerAddr] = useState(
-    () => searchParams.get("server") || localStorage.getItem("echolink-server") || window.location.hostname
-  );
-  const [roomId, setRoomId] = useState(
-    () => urlRoomId || localStorage.getItem("echolink-room") || "test-room"
-  );
-  const [peerId, setPeerId] = useState(
-    () => searchParams.get("peer") || localStorage.getItem("echolink-peer") || `用户${Math.random().toString(36).slice(2, 6)}`
-  );
-  const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [joined, setJoined] = useState(false);
   const [showDeviceMenu, setShowDeviceMenu] = useState(false);
   const deviceMenuRef = useRef<HTMLDivElement>(null);
+  const joinedRef = useRef(false);
 
-  // 同步 roomState.joined 与 URL：加入后更新 URL，离开后回到首页
+  // Auto-join when entering the room page.
   useEffect(() => {
-    if (roomState.joined && roomState.roomId) {
-      const expectedPath = `/room/${roomState.roomId}`;
-      const expectedSearch = `?server=${encodeURIComponent(serverAddr)}&peer=${encodeURIComponent(peerId)}`;
-      if (window.location.pathname !== expectedPath || window.location.search !== expectedSearch) {
-        navigate(`${expectedPath}${expectedSearch}`, { replace: true });
-      }
-    } else if (!roomState.joined && urlRoomId) {
-      // 已离开房间但 URL 仍停留在 /room/:roomId，回到首页
-      navigate("/", { replace: true });
-    }
-  }, [roomState.joined, roomState.roomId, serverAddr, peerId, urlRoomId, navigate]);
+    if (joinedRef.current) return;
 
-  const handleJoin = async () => {
-    if (!serverAddr.trim() || !roomId.trim() || !peerId.trim()) {
-      setError("服务器地址、房间号和昵称不能为空");
+    const serverAddr = searchParams.get("server") || localStorage.getItem("echolink-server") || window.location.hostname;
+    const roomId = urlRoomId || localStorage.getItem("echolink-room") || "";
+    const peerId =
+      user?.displayName ||
+      user?.username ||
+      localStorage.getItem("echolink-peer") ||
+      `用户${Math.random().toString(36).slice(2, 6)}`;
+
+    if (!roomId.trim()) {
+      navigate("/", { replace: true });
       return;
     }
 
-    setJoining(true);
-    setError(null);
+    joinedRef.current = true;
+    localStorage.setItem("echolink-server", serverAddr);
+    localStorage.setItem("echolink-room", roomId);
+    localStorage.setItem("echolink-peer", peerId);
 
-    try {
-      const addr = serverAddr.trim();
-      localStorage.setItem("echolink-server", addr);
-      localStorage.setItem("echolink-room", roomId.trim());
-      localStorage.setItem("echolink-peer", peerId.trim());
-
-      let wsUrl: string;
-      if (window.location.protocol === "https:") {
-        // HTTPS 页面通过 nginx 反代连接
-        wsUrl = `wss://${window.location.host}/ws`;
-      } else if (addr.startsWith("ws://") || addr.startsWith("wss://")) {
-        wsUrl = addr;
-      } else if (addr.includes(":")) {
-        wsUrl = `ws://${addr}/ws`;
-      } else {
-        wsUrl = await probePort(addr);
+    const doJoin = async () => {
+      try {
+        let wsUrl: string;
+        if (window.location.protocol === "https:") {
+          wsUrl = `wss://${window.location.host}/ws`;
+        } else if (serverAddr.startsWith("ws://") || serverAddr.startsWith("wss://")) {
+          wsUrl = serverAddr;
+        } else if (serverAddr.includes(":")) {
+          wsUrl = `ws://${serverAddr}/ws`;
+        } else {
+          wsUrl = await probePort(serverAddr);
+        }
+        await joinRoom(wsUrl, roomId.trim(), peerId, token);
+        setJoined(true);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "加入房间失败");
       }
-      await joinRoom(wsUrl, roomId.trim(), peerId.trim());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加入房间失败");
-    } finally {
-      setJoining(false);
-    }
-  };
+    };
+
+    doJoin();
+  }, [urlRoomId, searchParams, token, user, joinRoom, navigate]);
+
+  // Cleanup on unmount.
+  useEffect(() => {
+    return () => {
+      leaveRoom();
+    };
+  }, [leaveRoom]);
 
   const handleLeave = () => {
     leaveRoom();
@@ -157,98 +156,46 @@ export function Room() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showDeviceMenu]);
 
-  // 加入房间界面
-  if (!roomState.joined) {
+  // Loading / error state before joining.
+  if (!joined && !error) {
     return (
       <div className="app">
-        <div className="floating-particles">
-          <div className="particle"></div>
-          <div className="particle"></div>
-          <div className="particle"></div>
-          <div className="particle"></div>
-          <div className="particle"></div>
-          <div className="particle"></div>
-        </div>
-        <ThemeSwitcher
-          currentTheme={currentTheme}
-          setTheme={setTheme}
-          themes={themes}
-        />
+        <ThemeSwitcher currentTheme={currentTheme} setTheme={setTheme} themes={themes} />
         <div className="login-container">
           <div className="login-card">
             <div className="login-header">
-              <div className="logo-mark">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="23" />
-                  <line x1="8" y1="23" x2="16" y2="23" />
-                </svg>
-              </div>
-              <h1>EchoLink</h1>
-              <p>游戏语音，低延迟沟通</p>
+              <h1>正在加入房间...</h1>
+              <p>{urlRoomId}</p>
             </div>
-
-            <div className="login-form">
-              <div className="input-group">
-                <label>服务器地址</label>
-                <input
-                  type="text"
-                  placeholder="IP 或 IP:端口（不填端口自动嗅探）"
-                  value={serverAddr}
-                  onChange={(e) => setServerAddr(e.target.value)}
-                  disabled={joining}
-                />
-              </div>
-
-              <div className="input-group">
-                <label>房间号</label>
-                <input
-                  type="text"
-                  placeholder="输入房间号加入或创建"
-                  value={roomId}
-                  onChange={(e) => setRoomId(e.target.value)}
-                  disabled={joining}
-                />
-              </div>
-
-              <div className="input-group">
-                <label>昵称</label>
-                <input
-                  type="text"
-                  placeholder="你的游戏昵称"
-                  value={peerId}
-                  onChange={(e) => setPeerId(e.target.value)}
-                  disabled={joining}
-                  onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-                />
-              </div>
-
-              {error && <div className="error-msg">{error}</div>}
-
-              <button
-                className="login-btn"
-                onClick={handleJoin}
-                disabled={joining}
-              >
-                {joining ? "加入中..." : "进入语音房间"}
-              </button>
-            </div>
-            <Downloads />
           </div>
         </div>
       </div>
     );
   }
 
-  // 房间界面 - Discord 风格的语音频道
+  if (error) {
+    return (
+      <div className="app">
+        <ThemeSwitcher currentTheme={currentTheme} setTheme={setTheme} themes={themes} />
+        <div className="login-container">
+          <div className="login-card">
+            <div className="login-header">
+              <h1>加入房间失败</h1>
+            </div>
+            <div className="error-msg">{error}</div>
+            <button className="login-btn" onClick={() => navigate("/")}>
+              返回房间列表
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Room interface - Discord style voice channel
   return (
     <div className="app room-active">
-      <ThemeSwitcher
-        currentTheme={currentTheme}
-        setTheme={setTheme}
-        themes={themes}
-      />
+      <ThemeSwitcher currentTheme={currentTheme} setTheme={setTheme} themes={themes} />
 
       {/* 主内容区 */}
       <div className="channel-container">
@@ -405,13 +352,12 @@ export function Room() {
                 <div className="device-menu">
                   <div className="device-section">
                     <label>麦克风</label>
-                    <select
-                      value={selectedMic}
-                      onChange={(e) => setSelectedMic(e.target.value)}
-                    >
+                    <select value={selectedMic} onChange={(e) => setSelectedMic(e.target.value)}>
                       {micDevices.length === 0 && <option value="">未检测到设备</option>}
                       {micDevices.map((d) => (
-                        <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                        <option key={d.deviceId} value={d.deviceId}>
+                          {d.label}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -424,7 +370,9 @@ export function Room() {
                     >
                       {speakerDevices.length === 0 && <option value="">未检测到设备</option>}
                       {speakerDevices.map((d) => (
-                        <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
+                        <option key={d.deviceId} value={d.deviceId}>
+                          {d.label}
+                        </option>
                       ))}
                     </select>
                     {!supportsSetSinkId && (

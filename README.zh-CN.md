@@ -48,14 +48,20 @@ EchoLink/
 │   │   ├── room.ts           # 房间管理
 │   │   ├── peer.ts           # 对等端状态
 │   │   ├── config.ts         # 服务器配置
+│   │   ├── db.ts             # SQLite 用户持久化
+│   │   ├── auth.ts           # JWT 认证
 │   │   └── mediasoupWorker.ts # Worker / Router 初始化
 │   └── package.json
 ├── web/             # React 测试客户端
 │   ├── src/
 │   │   ├── components/
-│   │   │   └── Room.tsx      # 房间界面
+│   │   │   ├── Room.tsx      # 房间界面
+│   │   │   ├── RoomList.tsx  # 房间列表
+│   │   │   ├── Login.tsx     # 登录页
+│   │   │   └── Register.tsx  # 注册页
 │   │   ├── hooks/
-│   │   │   └── useMediasoup.ts # mediasoup 逻辑封装
+│   │   │   ├── useMediasoup.ts # mediasoup 逻辑封装
+│   │   │   └── useAuth.ts    # 认证状态管理
 │   │   ├── App.tsx
 │   │   └── main.tsx
 │   └── package.json
@@ -63,6 +69,11 @@ EchoLink/
 │   └── VoiceChat/
 │       ├── MainWindow.xaml     # UI 布局
 │       ├── MainWindow.xaml.cs  # 业务逻辑
+│       ├── LoginWindow.xaml    # 登录 UI
+│       ├── LoginWindow.xaml.cs # 连接 + 认证逻辑
+│       ├── RoomsWindow.xaml    # 房间列表 UI
+│       ├── RoomsWindow.xaml.cs # 房间列表逻辑
+│       ├── AuthService.cs      # HTTP 认证 / 房间列表服务
 │       └── VoiceChat.csproj
 ├── docker-compose.yml
 └── README.md
@@ -89,7 +100,7 @@ npm run build      # 编译
 npm start          # 生产模式
 ```
 
-服务器默认监听 `ws://localhost:3000`。
+服务器默认监听 `ws://localhost:1985`。
 
 ### 2. 启动 Web 客户端
 
@@ -132,8 +143,20 @@ dotnet run --project VoiceChat
 | `newProducer` | S→C (广播) | 新用户开麦通知 |
 | `producerClosed` | S→C (广播) | 用户关麦通知 |
 | `peerJoined` / `peerLeft` | S→C (广播) | 用户进出房间 |
+| `authenticate` | C→S | 可选 JWT 认证 |
+| `authenticated` | S→C | 认证成功 |
+| `listRooms` | C→S | 请求在线房间列表 |
+| `roomsList` | S→C | 在线房间列表响应 |
 
 **关键顺序**：创建 Transport → 连接 Transport → 生产/消费。跳过 `connectTransport` 会导致静默失败。
+
+### REST API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/auth/register` | 注册新账号 |
+| POST | `/api/auth/login` | 登录获取 JWT |
+| GET | `/api/rooms` | 获取在线房间列表 |
 
 ---
 
@@ -154,11 +177,13 @@ dotnet run --project VoiceChat
 docker-compose up -d
 ```
 
+注意：`docker-compose.yml` 已将 `./data` 挂载到 server 容器以持久化 SQLite 数据库。生产环境请在 `.env` 中设置强 `JWT_SECRET`。
+
 ---
 
 ## 📝 开发规范
 
-1. mediasoup 和 SIPSorcery API 必须严格遵循官方文档，禁止猜测方法名或参数
+1. mediasoup API 必须严格遵循官方文档，禁止猜测方法名或参数
 2. 实现 transport/producer/consumer 逻辑前，先写注释描述完整协商流程
 3. 禁止在客户端代码中硬编码密钥或凭证，使用服务器配置或环境变量
 4. 每个模块实现后，提供本地运行/验证命令

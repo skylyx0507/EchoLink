@@ -17,8 +17,12 @@ services:
       - LISTEN_PORT=3000
       - RTC_MIN_PORT=${RTC_MIN_PORT:-10000}
       - RTC_MAX_PORT=${RTC_MAX_PORT:-10100}
+      - DATABASE_PATH=/data/echolink.db
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
     env_file:
       - .env
+    volumes:
+      - ./data:/data
     networks:
       - echolink-net
 

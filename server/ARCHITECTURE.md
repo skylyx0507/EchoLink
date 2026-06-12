@@ -38,7 +38,9 @@ server/
 │   ├── mediasoupWorker.ts    # mediasoup Worker 创建 + Router 创建
 │   ├── signaling.ts          # WebSocket 信令处理（核心逻辑，~400 行）
 │   ├── room.ts               # Room 类：管理 Router + Peer 集合 + Transport 创建
-│   └── peer.ts               # Peer 接口：sendTransport / recvTransport / producers / consumers
+│   ├── peer.ts               # Peer 接口：sendTransport / recvTransport / producers / consumers
+│   ├── db.ts                 # SQLite 数据库层：用户账号持久化
+│   └── auth.ts               # JWT 认证：注册、登录、Token 校验
 ├── dist/                     # tsc 编译输出（CommonJS）
 ├── package.json
 ├── tsconfig.json
@@ -62,12 +64,12 @@ const roomClients = new Map<string, Set<WebSocket>>();  // roomId → WebSocket 
 ```
 
 **启动顺序**：
-1. `createWorker()` — 创建 mediasoup Worker（C++ 子进程）
+1. `createWorkerPool()` — 创建 mediasoup Worker 池（每个 CPU 核心一个 Worker）
 2. `http.createServer()` — HTTP 服务器（仅提供 `/health` 健康检查）
 3. `new WebSocketServer({ server: httpServer })` — WebSocket 复用 HTTP 端口
-4. `handleSignaling(ws, rooms, roomClients, worker)` — 每个连接进入信令处理
+4. `handleSignaling(ws, rooms, roomClients, getNextWorker)` — 每个连接进入信令处理
 
-**注意**：当前仅创建 **1 个 Worker**，所有 Room 共享该 Worker 上的不同 Router。
+**注意**：Worker 池按 CPU 核心数创建，新 Room 通过 round-robin 分配到不同 Worker。
 
 ---
 
@@ -80,6 +82,9 @@ const roomClients = new Map<string, Set<WebSocket>>();  // roomId → WebSocket 
 | 监听端口 | `LISTEN_PORT` | `1985` | HTTP + WebSocket 端口 |
 | 公网 IP | `ANNOUNCED_IP` | `127.0.0.1` | WebRTC ICE 候选地址 |
 | RTC 端口范围 | `RTC_MIN_PORT` / `RTC_MAX_PORT` | 10000 ~ 10100 | mediasoup UDP/TCP 端口 |
+| JWT 密钥 | `JWT_SECRET` | 无 | 签发/校验登录 token（生产环境必须设置） |
+| Token 有效期 | `JWT_EXPIRES_IN` | `7d` | JWT access token 有效期 |
+| 数据库路径 | `DATABASE_PATH` | `./echolink.db` | SQLite 文件路径 |
 | 日志级别 | — | `warn` | mediasoup Worker 日志 |
 
 **媒体编解码器**：仅配置 **Opus 音频**（48kHz, 2 通道, inband FEC），无视频。
@@ -137,13 +142,49 @@ interface Peer {
 
 ---
 
-### 4.6 `signaling.ts` — 信令处理（最复杂模块）
+### 4.6 `db.ts` — SQLite 数据库层
 
-**函数**：`handleSignaling(ws, rooms, roomClients, worker)`
+**职责**：持久化用户账号信息。
+
+**表结构**：
+```sql
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  display_name TEXT,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+```
+
+**导出函数**：
+- `createUser(input)` — 创建新用户
+- `findUserByUsername(username)` — 按用户名查找
+- `findUserById(id)` — 按 ID 查找
+
+### 4.7 `auth.ts` — JWT 认证
+
+**职责**：用户注册、登录、Token 签发与校验。
+
+**核心函数**：
+- `register(username, password, displayName?)` — bcrypt 哈希后写入用户表
+- `login(username, password)` — 校验密码并返回 JWT
+- `verifyToken(token)` — 校验 token 返回 `{ userId, username, displayName }`
+
+**安全约束**：
+- 密码使用 `bcrypt` 哈希，salt rounds = 10
+- `JWT_SECRET` 必须从环境变量读取，禁止硬编码
+- 用户名至少 3 个字符，密码至少 6 个字符
+
+### 4.8 `signaling.ts` — 信令处理（最复杂模块）
+
+**函数**：`handleSignaling(ws, rooms, roomClients, getNextWorker)`
 
 **闭包状态**（每个 WebSocket 连接独立）：
 - `currentPeerId: string | null`
 - `currentRoom: Room | null`
+- `currentUserId: number | null` — 认证用户 ID（可选）
+- `currentDisplayName: string | null` — 认证用户显示名（可选）
 
 **消息分发**：通过 `switch (msg.type)` 路由到对应 handler。
 
@@ -153,8 +194,13 @@ interface Peer {
 
 ### 5.1 完整交互流程
 
+**已认证客户端**在 `joinRoom` 之前需要先发送 `authenticate`：
+
 ```
 Client                                                          Server
+  |                                                               |
+  |── authenticate { token }────────────────────────────────────>>|
+  |<<────────────────────────── authenticated { userId, username }─|
   |                                                               |
   |── joinRoom { roomId, peerId }───────────────────────────────>>|
   |<<────────────────────────── joinedRoom { rtpCapabilities, ... }─|
@@ -202,6 +248,37 @@ Client                                                          Server
 | `consumerClosed` | S→C | Consumer 关闭通知 |
 | `createPlainTransport` | C→S | 创建 PlainTransport（非浏览器客户端） |
 | `plainTransportCreated` | S→C | 返回 `ip`, `port`, `rtcpPort` |
+| `authenticate` | C→S | 发送 JWT token 进行 WebSocket 认证 |
+| `authenticated` | S→C | 认证成功，返回 `userId`, `username`, `displayName` |
+| `authError` | S→C | 认证失败 |
+| `listRooms` | C→S | 请求当前在线房间列表 |
+| `roomsList` | S→C | 返回 `{ rooms: [{ roomId, peerCount }] }` |
+
+### 5.3 HTTP REST API
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/api/auth/register` | 用户注册 | 否 |
+| POST | `/api/auth/login` | 用户登录 | 否 |
+| GET | `/api/rooms` | 获取当前在线房间列表 | 可选 |
+| GET | `/health` | 健康检查 | 否 |
+
+**注册/登录请求体**：
+```json
+{
+  "username": "alice",
+  "password": "secret123",
+  "displayName": "Alice"   // 可选，仅注册支持
+}
+```
+
+**成功响应**：
+```json
+{
+  "user": { "userId": 1, "username": "alice", "displayName": "Alice" },
+  "token": "eyJhbGciOiJIUzI1NiIs..."
+}
+```
 
 ---
 
@@ -244,7 +321,6 @@ Client                                                          Server
 
 | 优先级 | 问题 | 影响 | 建议方向 |
 |--------|------|------|----------|
-| 🔴 高 | **单 Worker 瓶颈** | 仅利用 1 个 CPU 核心，无法水平扩展 | 实现 Worker 池 + 按负载分配 Room |
 | 🟡 中 | **全局状态耦合** | `rooms` / `roomClients` 定义在 `index.ts`，通过参数层层传递 | 提取 `RoomManager` 服务层 |
 | 🟡 中 | **signaling.ts 过于庞大** | ~400 行，所有 handler 挤在一个闭包，难以单元测试 | 拆分为独立 Handler 类 + 依赖注入 |
 | 🟡 中 | **类型安全薄弱** | 多处 `as any` / `as unknown` 断言；`SignalingMessage` 字段全可选 | 引入 zod 做运行时校验 + 精确联合类型 |

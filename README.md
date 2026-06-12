@@ -48,14 +48,20 @@ EchoLink/
 │   │   ├── room.ts           # Room management
 │   │   ├── peer.ts           # Peer state tracking
 │   │   ├── config.ts         # Server configuration
+│   │   ├── db.ts             # SQLite user persistence
+│   │   ├── auth.ts           # JWT authentication
 │   │   └── mediasoupWorker.ts # Worker / Router initialization
 │   └── package.json
 ├── web/             # React test client
 │   ├── src/
 │   │   ├── components/
-│   │   │   └── Room.tsx      # Room UI component
+│   │   │   ├── Room.tsx      # Room UI component
+│   │   │   ├── RoomList.tsx  # Room list UI
+│   │   │   ├── Login.tsx     # Login page
+│   │   │   └── Register.tsx  # Register page
 │   │   ├── hooks/
-│   │   │   └── useMediasoup.ts # mediasoup logic hook
+│   │   │   ├── useMediasoup.ts # mediasoup logic hook
+│   │   │   └── useAuth.ts    # Authentication hook
 │   │   ├── App.tsx
 │   │   └── main.tsx
 │   └── package.json
@@ -63,6 +69,11 @@ EchoLink/
 │   └── VoiceChat/
 │       ├── MainWindow.xaml     # UI layout
 │       ├── MainWindow.xaml.cs  # Business logic
+│       ├── LoginWindow.xaml    # Login UI
+│       ├── LoginWindow.xaml.cs # Connection + auth logic
+│       ├── RoomsWindow.xaml    # Room list UI
+│       ├── RoomsWindow.xaml.cs # Room list logic
+│       ├── AuthService.cs      # HTTP auth / room list service
 │       └── VoiceChat.csproj
 ├── docker-compose.yml
 └── README.md
@@ -89,7 +100,7 @@ npm run build        # Compile TypeScript
 npm start            # Production mode
 ```
 
-The server listens on `ws://localhost:3000` by default.
+The server listens on `ws://localhost:1985` by default.
 
 ### 2. Start the Web Client
 
@@ -132,8 +143,20 @@ JSON-based WebSocket signaling protocol. Core message types:
 | `newProducer` | S→C (broadcast) | New peer started speaking |
 | `producerClosed` | S→C (broadcast) | Peer stopped speaking |
 | `peerJoined` / `peerLeft` | S→C (broadcast) | Peer entered/left room |
+| `authenticate` | C→S | Optional JWT authentication |
+| `authenticated` | S→C | Authentication success |
+| `listRooms` | C→S | Request online room list |
+| `roomsList` | S→C | Online room list response |
 
 **Critical ordering**: Create Transport → Connect Transport → Produce/Consume. Skipping `connectTransport` will fail silently.
+
+### REST API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/auth/register` | Register a new account |
+| POST | `/api/auth/login` | Login and obtain JWT |
+| GET | `/api/rooms` | List online rooms |
 
 ---
 
@@ -154,11 +177,13 @@ JSON-based WebSocket signaling protocol. Core message types:
 docker-compose up -d
 ```
 
+Note: The `docker-compose.yml` mounts `./data` to persist the SQLite database. Set a strong `JWT_SECRET` in `.env` for production.
+
 ---
 
 ## 📝 Development Guidelines
 
-1. **mediasoup and SIPSorcery APIs must follow official documentation exactly.** Do not guess method names or parameters.
+1. **mediasoup APIs must follow official documentation exactly.** Do not guess method names or parameters.
 2. Before implementing transport/producer/consumer logic, write comments describing the full negotiation flow first.
 3. **Never hardcode secrets** (keys, coturn credentials) in client code. Use server config or environment variables.
 4. After implementing each module, provide specific local run/verify commands.

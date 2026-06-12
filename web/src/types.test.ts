@@ -44,6 +44,11 @@ describe('types / SignalingMessage', () => {
       { type: 'peerJoined', peerId: 'bob' },
       { type: 'peerLeft', peerId: 'bob' },
       { type: 'producerClosed', producerId: 'p1', peerId: 'bob' },
+      { type: 'authenticate', token: 'jwt-token' },
+      { type: 'authenticated', userId: 1, username: 'alice', displayName: 'Alice' },
+      { type: 'authError', message: 'invalid token' },
+      { type: 'listRooms' },
+      { type: 'roomsList', rooms: [{ roomId: 'r', peerCount: 2 }] },
       { type: 'error', message: 'oops' },
     ];
 

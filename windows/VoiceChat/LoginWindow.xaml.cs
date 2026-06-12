@@ -17,6 +17,9 @@ public partial class LoginWindow : Window
     private static readonly int[] ProbePorts = [1985];
 
     private string _currentTheme = "light";
+    private string _password = "";
+    private string? _accessToken;
+    private UserInfo? _currentUser;
 
     private static readonly Dictionary<string, (string bg, string bgSecondary, string text, string textMuted, string primary, string primaryHover, string success, string danger, string bgInput, string bgCard, string border)> ThemeColors = new()
     {
@@ -50,17 +53,28 @@ public partial class LoginWindow : Window
                 var json = JsonDocument.Parse(File.ReadAllText(SettingsFile));
                 var root = json.RootElement;
                 if (root.TryGetProperty("server", out var s)) ServerInput.Text = s.GetString() ?? "localhost";
-                if (root.TryGetProperty("room", out var r)) RoomInput.Text = r.GetString() ?? "";
                 if (root.TryGetProperty("peer", out var p)) PeerInput.Text = p.GetString() ?? "";
                 if (root.TryGetProperty("theme", out var t)) _currentTheme = t.GetString() ?? "light";
+                if (root.TryGetProperty("username", out var u)) UsernameInput.Text = u.GetString() ?? "";
+                if (root.TryGetProperty("token", out var tok) && tok.ValueKind != JsonValueKind.Null)
+                    _accessToken = tok.GetString();
+                if (root.TryGetProperty("user", out var usr) && usr.ValueKind == JsonValueKind.Object)
+                {
+                    _currentUser = new UserInfo
+                    {
+                        UserId = usr.TryGetProperty("userId", out var uid) ? uid.GetInt32() : 0,
+                        Username = usr.TryGetProperty("username", out var un) ? un.GetString() ?? "" : "",
+                        DisplayName = usr.TryGetProperty("displayName", out var dn) && dn.ValueKind != JsonValueKind.Null
+                            ? dn.GetString()
+                            : null,
+                    };
+                }
             }
         }
         catch { }
 
         if (string.IsNullOrEmpty(ServerInput.Text))
             ServerInput.Text = "localhost";
-        if (string.IsNullOrEmpty(RoomInput.Text))
-            RoomInput.Text = ServerInput.Text;
     }
 
     private void SaveSettings()
@@ -68,13 +82,16 @@ public partial class LoginWindow : Window
         try
         {
             Directory.CreateDirectory(SettingsDir);
-            File.WriteAllText(SettingsFile, JsonSerializer.Serialize(new
+            var settings = new
             {
                 server = ServerInput.Text.Trim(),
-                room = RoomInput.Text.Trim(),
                 peer = PeerInput.Text.Trim(),
                 theme = _currentTheme,
-            }));
+                username = UsernameInput.Text.Trim(),
+                token = _accessToken,
+                user = _currentUser,
+            };
+            File.WriteAllText(SettingsFile, JsonSerializer.Serialize(settings));
         }
         catch { }
     }
@@ -136,65 +153,170 @@ public partial class LoginWindow : Window
             JoinBtn_Click(sender, e);
     }
 
+    private async void LoginBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var username = UsernameInput.Text.Trim();
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(_password))
+        {
+            AuthStatusText.Text = "请输入用户名和密码";
+            return;
+        }
+
+        LoginBtn.IsEnabled = false;
+        RegisterBtn.IsEnabled = false;
+        AuthStatusText.Text = "登录中...";
+
+        try
+        {
+            var serverUrl = await ResolveServerUrlAsync();
+            var authService = new AuthService(serverUrl);
+            var result = await authService.LoginAsync(username, _password);
+            if (result != null)
+            {
+                _accessToken = result.Token;
+                _currentUser = result.User;
+                SaveSettings();
+                AuthStatusText.Text = $"登录成功: {result.User.DisplayName ?? result.User.Username}";
+                if (string.IsNullOrEmpty(PeerInput.Text))
+                    PeerInput.Text = result.User.DisplayName ?? result.User.Username;
+            }
+            else
+            {
+                AuthStatusText.Text = "登录失败";
+            }
+        }
+        catch (Exception ex)
+        {
+            AuthStatusText.Text = $"登录失败: {ex.Message}";
+        }
+        finally
+        {
+            LoginBtn.IsEnabled = true;
+            RegisterBtn.IsEnabled = true;
+        }
+    }
+
+    private async void RegisterBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var username = UsernameInput.Text.Trim();
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(_password))
+        {
+            AuthStatusText.Text = "请输入用户名和密码";
+            return;
+        }
+        if (_password.Length < 6)
+        {
+            AuthStatusText.Text = "密码至少需要 6 个字符";
+            return;
+        }
+
+        LoginBtn.IsEnabled = false;
+        RegisterBtn.IsEnabled = false;
+        AuthStatusText.Text = "注册中...";
+
+        try
+        {
+            var serverUrl = await ResolveServerUrlAsync();
+            var authService = new AuthService(serverUrl);
+            var result = await authService.RegisterAsync(username, _password, PeerInput.Text.Trim());
+            if (result != null)
+            {
+                _accessToken = result.Token;
+                _currentUser = result.User;
+                SaveSettings();
+                AuthStatusText.Text = $"注册成功: {result.User.DisplayName ?? result.User.Username}";
+            }
+            else
+            {
+                AuthStatusText.Text = "注册失败";
+            }
+        }
+        catch (Exception ex)
+        {
+            AuthStatusText.Text = $"注册失败: {ex.Message}";
+        }
+        finally
+        {
+            LoginBtn.IsEnabled = true;
+            RegisterBtn.IsEnabled = true;
+        }
+    }
+
+    private void PasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        _password = PasswordInput.Password;
+    }
+
     private async void JoinBtn_Click(object sender, RoutedEventArgs e)
     {
         var addr = ServerInput.Text.Trim();
-        var room = RoomInput.Text.Trim();
         var peer = PeerInput.Text.Trim();
 
-        if (string.IsNullOrEmpty(addr) || string.IsNullOrEmpty(room) || string.IsNullOrEmpty(peer))
+        if (string.IsNullOrEmpty(addr) || string.IsNullOrEmpty(peer))
         {
-            ShowError("服务器地址、房间号和昵称不能为空");
+            ShowError("服务器地址和昵称不能为空");
             return;
         }
 
         string serverUrl;
-        if (addr.StartsWith("ws://") || addr.StartsWith("wss://"))
-            serverUrl = addr;
-        else if (addr.Contains(':'))
-            serverUrl = $"ws://{addr}";
-        else
+        try
         {
-            try
-            {
-                serverUrl = await ProbePortAsync(addr);
-            }
-            catch (Exception ex)
-            {
-                ShowError(ex.Message);
-                return;
-            }
+            serverUrl = await ResolveServerUrlAsync();
         }
-
-        // 如果没有保存过房间号，或房间号为空，默认使用服务器地址
-        if (string.IsNullOrEmpty(RoomInput.Text.Trim()))
+        catch (Exception ex)
         {
-            RoomInput.Text = addr.Split(':')[0];
+            ShowError(ex.Message);
+            return;
         }
 
         SaveSettings();
 
         JoinBtn.IsEnabled = false;
-        JoinBtn.Content = "加入中...";
+        JoinBtn.Content = "连接中...";
         LoadingBar.Visibility = Visibility.Visible;
 
         try
         {
-            // 打开主窗口
-            var mainWindow = new MainWindow(serverUrl, room, peer, _currentTheme);
-            mainWindow.Show();
-            Close();
+            var roomsWindow = new RoomsWindow(serverUrl, _currentTheme)
+            {
+                AccessToken = _accessToken,
+                CurrentUser = _currentUser,
+            };
+            if (roomsWindow.ShowDialog() == true && !string.IsNullOrEmpty(roomsWindow.SelectedRoomId))
+            {
+                var mainWindow = new MainWindow(serverUrl, roomsWindow.SelectedRoomId, peer, _currentTheme, _accessToken);
+                mainWindow.Show();
+                Close();
+            }
+            else
+            {
+                JoinBtn.IsEnabled = true;
+                JoinBtn.Content = "进入房间列表";
+                LoadingBar.Visibility = Visibility.Collapsed;
+            }
         }
         catch (Exception ex)
         {
             ShowError(ex.Message);
             JoinBtn.IsEnabled = true;
-            JoinBtn.Content = "进入语音房间";
+            JoinBtn.Content = "进入房间列表";
             LoadingBar.Visibility = Visibility.Collapsed;
         }
     }
 
-    private static async Task<string> ProbePortAsync(string host)
+    private async Task<string> ResolveServerUrlAsync()
+    {
+        var addr = ServerInput.Text.Trim();
+        if (addr.StartsWith("ws://") || addr.StartsWith("wss://"))
+            return addr;
+        if (addr.Contains(':'))
+            return $"ws://{addr}";
+
+        var port = await ProbePortAsync(addr);
+        return $"ws://{addr}:{port}";
+    }
+
+    private static async Task<int> ProbePortAsync(string host)
     {
         var tasks = ProbePorts.Select(async port =>
         {
@@ -211,7 +333,7 @@ public partial class LoginWindow : Window
         var results = await Task.WhenAll(tasks);
         var port2 = results.FirstOrDefault(p => p > 0);
         if (port2 <= 0) throw new Exception($"无法连接到 {host}:{string.Join(",", ProbePorts)}，请检查服务器是否运行");
-        return $"ws://{host}:{port2}";
+        return port2;
     }
 
     private void MinimizeBtn_Click(object sender, RoutedEventArgs e)

@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private string _serverUrl = "";
     private string _roomId = "";
     private string _peerId = "";
+    private string? _accessToken;
 
     // ==================== mediasoup ====================
     private string? _sendTransportId;
@@ -114,12 +115,13 @@ public partial class MainWindow : Window
     private const int OpusChannels = 2; // mediasoup 要求 Opus 2 通道
     private const int FrameSize = 960; // 20ms @ 48kHz
 
-    public MainWindow(string serverUrl, string roomId, string peerId, string theme)
+    public MainWindow(string serverUrl, string roomId, string peerId, string theme, string? accessToken = null)
     {
         InitializeComponent();
         _serverUrl = serverUrl;
         _roomId = roomId;
         _peerId = peerId;
+        _accessToken = accessToken;
         ApplyTheme(theme);
         Loaded += async (_, _) =>
         {
@@ -323,7 +325,22 @@ public partial class MainWindow : Window
         if (_ws.ReadyState != WebSocketState.Open)
             throw new Exception("无法连接到服务器");
 
-        // 4. 加入房间
+        // 4. Authenticate if a token is available.
+        if (!string.IsNullOrEmpty(_accessToken))
+        {
+            SendMessage(new { type = "authenticate", token = _accessToken });
+            var authMsg = await WaitForMessage("authenticated");
+            if (authMsg.TryGetProperty("displayName", out var dn) && dn.ValueKind != JsonValueKind.Null)
+            {
+                _peerId = dn.GetString() ?? _peerId;
+            }
+            else if (authMsg.TryGetProperty("username", out var un))
+            {
+                _peerId = un.GetString() ?? _peerId;
+            }
+        }
+
+        // 5. 加入房间
         SendMessage(new { type = "joinRoom", roomId = _roomId, peerId = _peerId });
         var joined = await WaitForMessage("joinedRoom");
 
