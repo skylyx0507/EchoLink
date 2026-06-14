@@ -69,7 +69,7 @@ export function useMediasoup() {
   const animFrameRef = useRef<number | null>(null);
   const noiseSuppressorRef = useRef<AudioWorkletNode | null>(null);
   const rawStreamRef = useRef<MediaStream | null>(null);
-  const messageHandlersRef = useRef<Map<string, (msg: SignalingMessage) => void>>(new Map());
+  const messageHandlersRef = useRef<Map<string, ((msg: SignalingMessage) => void)[]>>(new Map());
   const latencyIntervalRef = useRef<number | null>(null);
 
   // 检测浏览器是否支持 setSinkId
@@ -95,23 +95,51 @@ export function useMediasoup() {
   const waitForMessage = useCallback((type: string, timeoutMs = 15000): Promise<SignalingMessage> => {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        messageHandlersRef.current.delete(type);
+        const queue = messageHandlersRef.current.get(type);
+        if (queue) {
+          const idx = queue.indexOf(handler);
+          if (idx !== -1) queue.splice(idx, 1);
+          if (queue.length === 0) messageHandlersRef.current.delete(type);
+        }
         reject(new Error(`等待 ${type} 超时`));
       }, timeoutMs);
 
       const handler = (msg: SignalingMessage) => {
         if (msg.type === "error") {
-          // 忽略不相关的错误消息，让超时处理
           console.warn(`waitForMessage(${type}): ignoring error: ${msg.message}`);
           return;
         }
         clearTimeout(timer);
-        messageHandlersRef.current.delete(type);
+        const queue = messageHandlersRef.current.get(type);
+        if (queue) {
+          const idx = queue.indexOf(handler);
+          if (idx !== -1) queue.splice(idx, 1);
+          if (queue.length === 0) messageHandlersRef.current.delete(type);
+        }
         resolve(msg);
       };
 
-      messageHandlersRef.current.set(type, handler);
+      const queue = messageHandlersRef.current.get(type) ?? [];
+      queue.push(handler);
+      messageHandlersRef.current.set(type, queue);
     });
+  }, []);
+
+  // 向队列添加 handler（用于 transportConnected / produced 等需要 predicate 匹配的场景）
+  const pushHandler = useCallback((type: string, handler: (msg: SignalingMessage) => void) => {
+    const queue = messageHandlersRef.current.get(type) ?? [];
+    queue.push(handler);
+    messageHandlersRef.current.set(type, queue);
+  }, []);
+
+  // 从队列移除特定 handler
+  const removeHandler = useCallback((type: string, handler: (msg: SignalingMessage) => void) => {
+    const queue = messageHandlersRef.current.get(type);
+    if (queue) {
+      const idx = queue.indexOf(handler);
+      if (idx !== -1) queue.splice(idx, 1);
+      if (queue.length === 0) messageHandlersRef.current.delete(type);
+    }
   }, []);
 
   // 创建发送 transport
@@ -138,14 +166,14 @@ export function useMediasoup() {
 
       const handleConnect = (m: SignalingMessage) => {
         if (m.type === "transportConnected" && m.transportId === transport.id) {
-          messageHandlersRef.current.delete("transportConnected");
+          removeHandler("transportConnected", handleConnect);
           callback();
         } else if (m.type === "error" && m.transportId === transport.id) {
-          messageHandlersRef.current.delete("transportConnected");
+          removeHandler("transportConnected", handleConnect);
           errback(new Error(m.message));
         }
       };
-      messageHandlersRef.current.set("transportConnected", handleConnect);
+      pushHandler("transportConnected", handleConnect);
     });
 
     transport.on(
@@ -155,14 +183,14 @@ export function useMediasoup() {
 
         const handleProduced = (m: SignalingMessage) => {
           if (m.type === "produced") {
-            messageHandlersRef.current.delete("produced");
+            removeHandler("produced", handleProduced);
             callback({ id: m.producerId });
           } else if (m.type === "error") {
-            messageHandlersRef.current.delete("produced");
+            removeHandler("produced", handleProduced);
             errback(new Error(m.message));
           }
         };
-        messageHandlersRef.current.set("produced", handleProduced);
+        pushHandler("produced", handleProduced);
       }
     );
 
@@ -171,7 +199,7 @@ export function useMediasoup() {
     });
 
     sendTransportRef.current = transport;
-  }, [send, waitForMessage]);
+  }, [send, waitForMessage, pushHandler, removeHandler]);
 
   // 创建接收 transport
   const createRecvTransport = useCallback(async () => {
@@ -197,14 +225,14 @@ export function useMediasoup() {
 
       const handleConnect = (m: SignalingMessage) => {
         if (m.type === "transportConnected" && m.transportId === transport.id) {
-          messageHandlersRef.current.delete("transportConnected");
+          removeHandler("transportConnected", handleConnect);
           callback();
         } else if (m.type === "error" && m.transportId === transport.id) {
-          messageHandlersRef.current.delete("transportConnected");
+          removeHandler("transportConnected", handleConnect);
           errback(new Error(m.message));
         }
       };
-      messageHandlersRef.current.set("transportConnected", handleConnect);
+      pushHandler("transportConnected", handleConnect);
     });
 
     transport.on("connectionstatechange", (state) => {
@@ -212,7 +240,7 @@ export function useMediasoup() {
     });
 
     recvTransportRef.current = transport;
-  }, [send, waitForMessage]);
+  }, [send, waitForMessage, pushHandler, removeHandler]);
 
   // 消费远程音频
   const consumeRemote = useCallback(
@@ -574,19 +602,18 @@ export function useMediasoup() {
       ws.onmessage = async (event) => {
         const msg = JSON.parse(event.data) as SignalingMessage;
 
-        // 检查是否有等待的处理器
-        const handler = messageHandlersRef.current.get(msg.type);
-        if (handler) {
+        const queue = messageHandlersRef.current.get(msg.type);
+        if (queue && queue.length > 0) {
+          const handler = queue.shift()!;
+          if (queue.length === 0) messageHandlersRef.current.delete(msg.type);
           handler(msg);
           return;
         }
 
         // 错误消息：投递给所有 pending handler（不自动删除）
-        // waitForMessage 的 handler 忽略错误后继续等待正常响应
-        // transportConnected/produced 的 handler 处理错误后自行清理
         if (msg.type === "error") {
-          for (const h of messageHandlersRef.current.values()) {
-            h(msg);
+          for (const queue of messageHandlersRef.current.values()) {
+            for (const h of queue) h(msg);
           }
           return;
         }
