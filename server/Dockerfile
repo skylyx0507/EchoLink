@@ -35,9 +35,9 @@ RUN npm run build
 RUN npm prune --production
 
 # 暴露端口
-# 1985: WebSocket 信令
+# 3000: WebSocket 信令
 # 10000-10100: mediasoup WebRTC UDP 端口
-EXPOSE 1985
+EXPOSE 3000
 EXPOSE 10000-10100/udp
 
 # 启动服务
