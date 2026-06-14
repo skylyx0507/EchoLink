@@ -101,6 +101,12 @@ public partial class MainWindow : Window
     private bool _micEnabled;
     private bool _isSpeaking;
 
+    // ==================== 重连 ====================
+    private bool _userInitiatedLeave;
+    private bool _reconnecting;
+    private const int ReconnectMaxRetries = 5;
+    private const int ReconnectBaseDelayMs = 1000;
+
     // ==================== 降噪 ====================
     private RnnoiseDenoiser? _rnnoiseDenoiser;
     private WebRtcNoiseSuppressor? _webRtcNoise;
@@ -318,8 +324,17 @@ public partial class MainWindow : Window
         // 3. 连接 WebSocket
         _ws = new WebSocket(_serverUrl);
         _ws.OnMessage += (_, evt) => Dispatcher.BeginInvoke(() => HandleMessage(evt.Data));
-        _ws.OnError += (_, evt) => Dispatcher.BeginInvoke(() => MessageBox.Show("连接失败: " + evt.Message, "错误", MessageBoxButton.OK, MessageBoxImage.Error));
-        _ws.OnClose += (_, _) => Dispatcher.BeginInvoke(() => LeaveRoom());
+        _ws.OnError += (_, evt) => Dispatcher.BeginInvoke(() =>
+        {
+            Console.WriteLine($"[WARN] WebSocket error: {evt.Message}");
+        });
+        _ws.OnClose += (_, _) => Dispatcher.BeginInvoke(() =>
+        {
+            if (_userInitiatedLeave)
+                LeaveRoom();
+            else
+                _ = ReconnectAsync();
+        });
         _ws.Connect();
 
         if (_ws.ReadyState != WebSocketState.Open)
@@ -406,6 +421,7 @@ public partial class MainWindow : Window
 
     private void LeaveRoom()
     {
+        _userInitiatedLeave = true;
         DisableMic();
         _recvCts?.Cancel();
         _udpClient?.Dispose(); _udpClient = null;
@@ -422,6 +438,160 @@ public partial class MainWindow : Window
         // 回到登录窗口
         Dispatcher.BeginInvoke(() =>
         {
+            var login = new LoginWindow();
+            login.Show();
+            Close();
+        });
+    }
+
+    // ==================== 重连 ====================
+
+    private async Task ReconnectAsync()
+    {
+        if (_reconnecting) return;
+        _reconnecting = true;
+
+        Console.WriteLine("[RECONNECT] Connection lost, attempting to reconnect...");
+        Dispatcher.BeginInvoke(() =>
+        {
+            ConnectionStatusText.Text = "正在重连...";
+            ConnectionStatusText.Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#e67e22"));
+        });
+
+        // 清理旧 WebSocket 状态
+        _ws?.Close(); _ws = null;
+        _sendTransportId = null; _recvTransportId = null; _producerId = null; _serverSendEndPoint = null;
+        _pendingMessages.Clear();
+
+        for (int attempt = 1; attempt <= ReconnectMaxRetries; attempt++)
+        {
+            int delay = ReconnectBaseDelayMs * (1 << (attempt - 1)); // 指数退避
+            Console.WriteLine($"[RECONNECT] Attempt {attempt}/{ReconnectMaxRetries}, waiting {delay}ms...");
+            Dispatcher.BeginInvoke(() => ConnectionStatusText.Text = $"重连中 ({attempt}/{ReconnectMaxRetries})...");
+            await Task.Delay(delay);
+
+            try
+            {
+                // 重建 WebSocket
+                _ws = new WebSocket(_serverUrl);
+                _ws.OnMessage += (_, evt) => Dispatcher.BeginInvoke(() => HandleMessage(evt.Data));
+                _ws.OnError += (_, evt) => Console.WriteLine($"[WARN] WebSocket error: {evt.Message}");
+                _ws.OnClose += (_, _) => Dispatcher.BeginInvoke(() =>
+                {
+                    if (_userInitiatedLeave)
+                        LeaveRoom();
+                    else
+                        _ = ReconnectAsync();
+                });
+                _ws.Connect();
+
+                if (_ws.ReadyState != WebSocketState.Open)
+                    throw new Exception("WebSocket connect failed");
+
+                // 重新认证
+                if (!string.IsNullOrEmpty(_accessToken))
+                {
+                    SendMessage(new { type = "authenticate", token = _accessToken });
+                    await WaitForMessage("authenticated", 5000);
+                }
+
+                // 重新加入房间
+                SendMessage(new { type = "joinRoom", roomId = _roomId, peerId = _peerId });
+                var joined = await WaitForMessage("joinedRoom", 5000);
+
+                // 重新创建 send transport
+                SendMessage(new { type = "createPlainTransport", direction = "send" });
+                var sendCreated = await WaitForMessage("plainTransportCreated", 5000);
+                _sendTransportId = sendCreated.GetProperty("id").GetString();
+                var sendIp = sendCreated.GetProperty("ip").GetString()!;
+                var sendPort = sendCreated.GetProperty("port").GetInt32();
+                _serverSendEndPoint = new IPEndPoint(IPAddress.Parse(sendIp), sendPort);
+
+                // 重新创建 recv transport
+                SendMessage(new { type = "createPlainTransport", direction = "recv" });
+                var recvCreated = await WaitForMessage("plainTransportCreated", 5000);
+                _recvTransportId = recvCreated.GetProperty("id").GetString()!;
+                var recvIp = recvCreated.GetProperty("ip").GetString()!;
+                var recvPort = recvCreated.GetProperty("port").GetInt32();
+
+                // 发送 dummy RTP 触发 comedia 检测
+                if (_udpClient != null)
+                {
+                    var recvEndPoint = new IPEndPoint(IPAddress.Parse(recvIp), recvPort);
+                    byte[] dummyRtp = new byte[12];
+                    dummyRtp[0] = 0x80; dummyRtp[1] = 0x6F;
+                    _udpClient.Send(dummyRtp, dummyRtp.Length, recvEndPoint);
+                }
+
+                // 如果麦克风之前是开的，重新 produce
+                if (_micEnabled)
+                {
+                    _sendSsrc = 1000000000u + (uint)Random.Shared.Next(0, 2000000000);
+                    SendMessage(new { type = "produce", kind = "audio", rtpParameters = BuildRtpParameters() });
+                    _ = WaitForMessage("produced").ContinueWith(t =>
+                    {
+                        Dispatcher.BeginInvoke(() =>
+                        {
+                            if (t.IsCompletedSuccessfully)
+                                _producerId = t.Result.GetProperty("producerId").GetString();
+                            else
+                                Console.WriteLine($"[ERROR] produce after reconnect failed: {t.Exception?.InnerException?.Message}");
+                        });
+                    });
+                }
+
+                // 重新消费远端 producer
+                if (joined.TryGetProperty("existingProducers", out var producers) && producers.GetArrayLength() > 0)
+                {
+                    foreach (var p in producers.EnumerateArray())
+                    {
+                        _ = ConsumeRemoteAsync(
+                            p.GetProperty("producerId").GetString()!,
+                            p.GetProperty("peerId").GetString()!);
+                    }
+                }
+
+                // 同步成员列表
+                if (joined.TryGetProperty("existingPeers", out var peers) && peers.GetArrayLength() > 0)
+                {
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        MembersPanel.Children.Clear();
+                        MembersPanel.Children.Add(CreateMemberCard(_peerId, _micEnabled, true));
+                        foreach (var p in peers.EnumerateArray())
+                        {
+                            var pid = p.GetString()!;
+                            _peers[pid] = new PeerInfo(pid, false);
+                            MembersPanel.Children.Add(CreateMemberCard(pid, false, false));
+                        }
+                        UpdateOnlineCount();
+                    });
+                }
+
+                // 重连成功
+                Console.WriteLine("[RECONNECT] Successfully reconnected!");
+                _reconnecting = false;
+                Dispatcher.BeginInvoke(() =>
+                {
+                    ConnectionStatusText.Text = "语音频道";
+                    ConnectionStatusText.Foreground = (Brush)FindResource("TextMutedBrush");
+                });
+                return;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RECONNECT] Attempt {attempt} failed: {ex.Message}");
+                _ws?.Close(); _ws = null;
+                _pendingMessages.Clear();
+            }
+        }
+
+        // 所有重试失败
+        _reconnecting = false;
+        Console.WriteLine("[RECONNECT] All attempts failed, returning to login.");
+        Dispatcher.BeginInvoke(() =>
+        {
+            MessageBox.Show("连接已断开，无法恢复。", "断线", MessageBoxButton.OK, MessageBoxImage.Warning);
             var login = new LoginWindow();
             login.Show();
             Close();

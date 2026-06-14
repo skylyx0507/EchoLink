@@ -347,7 +347,8 @@
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock x:Name="RoomNameText" FontSize="17" FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextBrush}"/>
-                        <TextBlock Text="语音频道" FontSize="12" Foreground="{DynamicResource TextMutedBrush}"/>
+                        <TextBlock x:Name="ConnectionStatusText" Text="语音频道" FontSize="12"
+                                   Foreground="{DynamicResource TextMutedBrush}"/>
                     </StackPanel>
                 </StackPanel>
 
