@@ -151,11 +151,15 @@ export function handleSignaling(
   async function handleJoinRoom(msg: SignalingMessage): Promise<void> {
     console.log(`[handleJoinRoom] Received joinRoom for roomId=${msg.roomId}, peerId=${msg.peerId}`);
     const { roomId } = msg;
-    if (!roomId) throw new Error("roomId required");
+    if (!roomId || typeof roomId !== "string" || roomId.length > 64 || !/^[a-zA-Z0-9_\-]+$/.test(roomId)) {
+      throw new Error("roomId required (alphanumeric, max 64 chars)");
+    }
 
     // Use authenticated display name if available, otherwise fall back to peerId from client.
     const peerId = currentDisplayName || msg.peerId;
-    if (!peerId) throw new Error("peerId required");
+    if (!peerId || typeof peerId !== "string" || peerId.length > 64) {
+      throw new Error("peerId required (max 64 chars)");
+    }
 
     // Leave previous room if any
     if (currentRoom && currentPeerId) {

@@ -63,6 +63,12 @@ function getBearerToken(req: http.IncomingMessage): string | null {
 }
 
 async function main(): Promise<void> {
+  // Fail fast if JWT_SECRET is missing
+  if (!process.env.JWT_SECRET) {
+    console.error("FATAL: JWT_SECRET environment variable is not set");
+    process.exit(1);
+  }
+
   // 1. Create mediasoup Worker pool
   const workers = await createWorkerPool();
   console.log(`Worker pool ready: ${workers.length} Workers`);
