@@ -764,14 +764,12 @@ public partial class MainWindow : Window
 
         // ② 降噪
         float rmsBefore = CalcRms(pcm);
-        bool noiseApplied = false;
 
         if (_webRtcEnabled && _webRtcNoise != null)
         {
             try
             {
                 pcm = _webRtcNoise.Process(pcm);
-                noiseApplied = true;
             }
             catch (Exception ex)
             {
@@ -783,7 +781,6 @@ public partial class MainWindow : Window
             try
             {
                 pcm = _rnnoiseDenoiser.Process(pcm);
-                noiseApplied = true;
             }
             catch (Exception ex)
             {
@@ -792,7 +789,6 @@ public partial class MainWindow : Window
         }
         else if (_noiseGateEnabled && rawMax < _noiseGateThreshold * 3)
         {
-            noiseApplied = true;
             for (int i = 0; i < pcm.Length; i += 2)
             {
                 short sample = BitConverter.ToInt16(pcm, i);

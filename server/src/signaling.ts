@@ -193,10 +193,10 @@ export function handleSignaling(
 
     // Collect existing producers from other peers
     const existingProducers = room.getOtherProducers(peerId)
-      .filter(p => p.appData && (p.appData as any).peerId)
+      .filter(p => p.appData && (p.appData as Record<string, unknown>).peerId)
       .map((p) => ({
         producerId: p.id,
-        peerId: (p.appData as Record<string, unknown>)?.peerId as string,
+        peerId: (p.appData as Record<string, unknown>).peerId as string,
       }));
     console.log(`[handleJoinRoom] Existing producers: ${existingProducers.length}`);
 
