@@ -303,7 +303,7 @@ public class AdaptiveJitterBuffer : IWaveProvider
             for (int i = 0; i < n && i < FrameSize; i++)
                 mixBuffer[i] += decodeBuffer[i * 2] / 32768f * volume;
         }
-        catch { }
+        catch (Exception ex) { Console.WriteLine($"[WARN] Opus decode failed: {ex.Message}"); }
     }
 
     // Overload that uses instance _mixBuffer
@@ -321,7 +321,7 @@ public class AdaptiveJitterBuffer : IWaveProvider
             for (int i = 0; i < n && i < FrameSize; i++)
                 _mixBuffer[i] += decodeBuffer[i * 2] / 32768f * volume;
         }
-        catch { }
+        catch (Exception ex) { Console.WriteLine($"[WARN] Opus PLC failed: {ex.Message}"); }
     }
 
     private static void ConvertFloatToPcm(float[] src, byte[] dst, int dstOffset, int count)

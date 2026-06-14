@@ -14,7 +14,7 @@ public partial class LoginWindow : Window
 {
     private static readonly string SettingsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "EchoLink");
     private static readonly string SettingsFile = Path.Combine(SettingsDir, "settings.json");
-    private static readonly int[] ProbePorts = [1985];
+    private static readonly int[] ProbePorts = [1985, 3000, 8080];
 
     private string _currentTheme = "light";
     private string _password = "";
@@ -71,7 +71,7 @@ public partial class LoginWindow : Window
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { Console.WriteLine($"[WARN] LoadSettings failed: {ex.Message}"); }
 
         if (string.IsNullOrEmpty(ServerInput.Text))
             ServerInput.Text = "localhost";
@@ -93,7 +93,7 @@ public partial class LoginWindow : Window
             };
             File.WriteAllText(SettingsFile, JsonSerializer.Serialize(settings));
         }
-        catch { }
+        catch (Exception ex) { Console.WriteLine($"[WARN] SaveSettings failed: {ex.Message}"); }
     }
 
     private void ApplyTheme(string theme)

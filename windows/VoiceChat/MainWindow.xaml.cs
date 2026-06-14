@@ -545,7 +545,7 @@ public partial class MainWindow : Window
                     ProcessIncomingRtp(result.Buffer);
                 }
                 catch (ObjectDisposedException) { break; }
-                catch { }
+        catch (Exception ex) { Console.WriteLine($"[WARN] SSRC extraction failed: {ex.Message}"); }
             }
         });
     }
@@ -671,7 +671,7 @@ public partial class MainWindow : Window
             }
 
             // 每次开麦生成新 SSRC，避免与旧 producer 冲突
-            _sendSsrc = 1000000000u + (uint)new Random().Next(0, 2000000000);
+            _sendSsrc = 1000000000u + (uint)Random.Shared.Next(0, 2000000000);
 
             // 发送 produce 请求
             SendMessage(new { type = "produce", kind = "audio", rtpParameters = BuildRtpParameters() });

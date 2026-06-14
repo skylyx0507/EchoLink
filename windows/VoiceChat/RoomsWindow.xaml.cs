@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -15,9 +13,6 @@ public partial class RoomsWindow : Window
     private readonly string _theme;
     private readonly AuthService _authService;
 
-    private static readonly string SettingsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "EchoLink");
-    private static readonly string SettingsFile = Path.Combine(SettingsDir, "settings.json");
-
     public string? AccessToken { get; set; }
     public UserInfo? CurrentUser { get; set; }
     public string? SelectedRoomId { get; private set; }
@@ -28,6 +23,7 @@ public partial class RoomsWindow : Window
         _serverUrl = serverUrl;
         _theme = theme;
         _authService = new AuthService(serverUrl);
+        ApplyTheme(theme);
 
         Loaded += async (_, _) =>
         {
@@ -36,48 +32,26 @@ public partial class RoomsWindow : Window
         };
     }
 
-    private void LoadSettings()
-    {
-        try
-        {
-            if (File.Exists(SettingsFile))
-            {
-                var json = JsonDocument.Parse(File.ReadAllText(SettingsFile));
-                var root = json.RootElement;
-                if (root.TryGetProperty("token", out var t) && t.ValueKind != JsonValueKind.Null)
-                    AccessToken = t.GetString();
-                if (root.TryGetProperty("user", out var u) && u.ValueKind == JsonValueKind.Object)
-                {
-                    CurrentUser = new UserInfo
-                    {
-                        UserId = u.TryGetProperty("userId", out var uid) ? uid.GetInt32() : 0,
-                        Username = u.TryGetProperty("username", out var un) ? un.GetString() ?? "" : "",
-                        DisplayName = u.TryGetProperty("displayName", out var dn) && dn.ValueKind != JsonValueKind.Null
-                            ? dn.GetString()
-                            : null,
-                    };
-                }
-                if (root.TryGetProperty("room", out var r) && r.ValueKind != JsonValueKind.Null)
-                    RoomInput.Text = r.GetString() ?? "";
-            }
-        }
-        catch { }
-    }
-
     private void ApplyTheme(string theme)
     {
-        var colors = new Dictionary<string, (string bg, string text, string muted, string primary, string input, string hover)>
+        var colors = new Dictionary<string, (string bg, string text, string muted, string primary, string input, string hover, string card, string border)>
         {
-            ["dark"] = ("#1e1f22", "#f2f3f5", "#949ba4", "#5865f2", "#383a40", "#404249"),
-            ["light"] = ("#f2f3f5", "#1e1f22", "#6b7280", "#5865f2", "#e3e5e8", "#d4d7dc"),
-            ["purple"] = ("#1a1025", "#f5f3ff", "#8b7faa", "#9b59b6", "#3d2d52", "#4a355e"),
-            ["ocean"] = ("#0a1628", "#ecfeff", "#5e8aa8", "#0088cc", "#1e2d44", "#264060"),
-            ["sunset"] = ("#1a0f0a", "#fef2f2", "#a87882", "#e67e22", "#3d2535", "#5d3a28"),
+            ["dark"] = ("#1e1f22", "#f2f3f5", "#949ba4", "#5865f2", "#383a40", "#404249", "#313338", "#3f4147"),
+            ["light"] = ("#f2f3f5", "#1e1f22", "#6b7280", "#5865f2", "#e3e5e8", "#d4d7dc", "#ffffff", "#d4d7dc"),
+            ["purple"] = ("#1a1025", "#f5f3ff", "#8b7faa", "#9b59b6", "#3d2d52", "#4a355e", "#2d1f3d", "#3f305e"),
+            ["ocean"] = ("#0a1628", "#ecfeff", "#5e8aa8", "#0088cc", "#1e2d44", "#264060", "#142a42", "#1f3d5e"),
+            ["sunset"] = ("#1a0f0a", "#fef2f2", "#a87882", "#e67e22", "#3d2535", "#5d3a28", "#2b1a24", "#5d3a28"),
         };
 
         if (!colors.TryGetValue(theme, out var c)) return;
 
         Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.bg));
+        Resources["TextBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.text));
+        Resources["TextMutedBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.muted));
+        Resources["PrimaryBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.primary));
+        Resources["BgCardBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.card));
+        Resources["BorderBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.border));
+        Resources["BgHoverBrush"] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(c.hover));
     }
 
     private void UpdateUserInfo()
@@ -131,8 +105,8 @@ public partial class RoomsWindow : Window
         {
             var card = new Border
             {
-                Background = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(220, 220, 220)),
+                Background = (Brush)FindResource("BgCardBrush"),
+                BorderBrush = (Brush)FindResource("BorderBrush"),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(14, 12, 14, 12),
@@ -150,7 +124,7 @@ public partial class RoomsWindow : Window
                 Text = room.RoomId,
                 FontSize = 15,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Colors.Black),
+                Foreground = (Brush)FindResource("TextBrush"),
             });
             info.Children.Add(new TextBlock
             {
@@ -176,7 +150,7 @@ public partial class RoomsWindow : Window
             card.Child = grid;
             card.MouseLeftButtonDown += (_, _) => EnterRoom(room.RoomId);
             card.MouseEnter += (_, _) => card.Background = (Brush)FindResource("BgHoverBrush");
-            card.MouseLeave += (_, _) => card.Background = Brushes.White;
+            card.MouseLeave += (_, _) => card.Background = (Brush)FindResource("BgCardBrush");
 
             RoomsPanel.Children.Add(card);
         }
