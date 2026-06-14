@@ -1,6 +1,6 @@
 const WebSocket = require("ws");
 
-const ws = new WebSocket("ws://localhost:3000");
+const ws = new WebSocket("ws://localhost:1985");
 
 ws.on("open", () => {
   console.log("Connected to signaling server");

@@ -1,5 +1,5 @@
 {
-  "name": "voice-chat-server",
+  "name": "echolink-server",
   "version": "1.0.0",
   "description": "mediasoup SFU + WebSocket signaling server for voice chat",
   "main": "dist/index.js",

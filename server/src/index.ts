@@ -155,6 +155,9 @@ async function main(): Promise<void> {
 
   wss.on("connection", (ws: WebSocket) => {
     console.log("New WebSocket connection");
+    ws.on("error", (err) => {
+      console.error("WebSocket error:", err.message);
+    });
     handleSignaling(ws, rooms, roomClients, getNextWorker);
   });
 
