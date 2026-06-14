@@ -124,13 +124,6 @@ export function Room() {
     doJoin();
   }, [urlRoomId, searchParams, token, user, joinRoom, navigate]);
 
-  // Cleanup on unmount.
-  useEffect(() => {
-    return () => {
-      leaveRoom();
-    };
-  }, [leaveRoom]);
-
   const handleLeave = () => {
     leaveRoom();
     navigate("/");

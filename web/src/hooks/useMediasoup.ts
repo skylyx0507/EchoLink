@@ -392,7 +392,6 @@ export function useMediasoup() {
       const mics: AudioDevice[] = [];
       const speakers: AudioDevice[] = [];
       for (const d of devices) {
-        if (d.deviceId === "continue") continue;
         if (d.kind === "audioinput") {
           mics.push({ deviceId: d.deviceId, label: d.label || `麦克风 ${mics.length + 1}` });
         } else if (d.kind === "audiooutput") {
